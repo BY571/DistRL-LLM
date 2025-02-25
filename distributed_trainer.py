@@ -39,7 +39,6 @@ class Trainer:
         self.max_monkey_rounds = config["max_monkey_rounds"]
         self.save_every = config["save_every"]
         self.eval_every = config["eval_every"]
-        self.keep_last_x = config["keep_last_x"]
         self.topk = config["topk"]
         self.run_name = config["run_name"]
         self.project_name = config["project_name"]
