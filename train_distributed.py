@@ -70,7 +70,7 @@ def reward_function(completions, solutions):
 if __name__ == "__main__":
     args = argparse.ArgumentParser()
     args.add_argument(
-        "--model", type=str, default="unsloth/Qwen2.5-14B-Instruct-bnb-4bit"
+        "--model", type=str, default="unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
     )
     args.add_argument("--dataset", type=str, default="easy", choices=["train", "easy"])
     args.add_argument(
@@ -81,20 +81,20 @@ if __name__ == "__main__":
     )
     args.add_argument("--run_name", type=str)  # forcing to be set by user
     args.add_argument("--project_name", type=str, default="chem-reason")
-    args.add_argument("--lr", type=float, default=4e-5)
-    args.add_argument("--max_new_tokens", type=int, default=1000)
+    args.add_argument("--lr", type=float, default=2e-5)
+    args.add_argument("--max_new_tokens", type=int, default=1250)
     args.add_argument("--max_prompt_tokens", type=int, default=331) # 303 for easy
     args.add_argument("--temperature", type=float, default=0.8)
     args.add_argument("--episodes", type=int, default=20)
     args.add_argument(
         "--num_candidates",
         type=int,
-        default=6,
+        default=16,
         help="Number of sampled candidate per monkey iteration",
     )
-    args.add_argument("--batch_size", type=int, default=8, help="Total batch size for all actors and learner that is later split into chunks") # 224 total per learner 
-    args.add_argument("--learner_chunk_size", type=int, default=1, help="Number of samples per learner chunk")
-    args.add_argument("--train_batch_size", type=int, default=4)
+    args.add_argument("--batch_size", type=int, default=32, help="Total batch size for all actors and learner that is later split into chunks") # 224 total per learner 
+    args.add_argument("--learner_chunk_size", type=int, default=6, help="Number of samples per learner chunk")
+    args.add_argument("--train_batch_size", type=int, default=8)
     args.add_argument(
         "--max_monkey_rounds",
         type=int,
@@ -119,15 +119,9 @@ if __name__ == "__main__":
         default=3,
         help="Number of actors to use, default is 0. Only uses the learner to generate and train.",
     )
-    args.add_argument(
-        "--keep_last_x",
-        type=int,
-        default=10,
-        help="Number of last model checkpoints to keep",
-    )
     args.add_argument("--learner", type=str, choices=["pg", "grpo"], default="pg")
-    args.add_argument("--max_lora_rank", type=int, default=32)
-    args.add_argument("--topk", type=int, default=16)
+    args.add_argument("--max_lora_rank", type=int, default=64)
+    args.add_argument("--topk", type=int, default=6)
 
     args = args.parse_args()
 
@@ -140,11 +134,6 @@ if __name__ == "__main__":
         raw_dataset = raw_dataset.filter(lambda x: args.task in x["problem_type"])
 
     raw_train_dataset = raw_dataset[args.dataset]  #easy or train
-    # if args.select_train_range is not None:
-    #     start, end, step = map(int, args.select_train_range.split(","))
-    #     raw_train_dataset = raw_train_dataset.select(range(start, end, step))
-    #     print(f"Selected train range: {start} to {end} with step {step}")
-
     raw_eval_dataset = raw_dataset["test"].select(range(0, 100))  
     
     print(f"\nNumber of train samples: {len(raw_train_dataset)}\n\n")    
@@ -154,6 +143,7 @@ if __name__ == "__main__":
         "run_name": args.run_name,
         "project_name": args.project_name,
         "lr": args.lr,
+        "max_prompt_tokens": args.max_prompt_tokens,
         "max_new_tokens": args.max_new_tokens,
         "episodes": args.episodes,
         "num_candidates": args.num_candidates,
@@ -166,7 +156,6 @@ if __name__ == "__main__":
         "model": args.model,
         "dataset": args.dataset,
         "number_of_actors": args.number_of_actors,
-        "keep_last_x": args.keep_last_x,
         "learner": args.learner,
         "use_vllm": True,
         "max_lora_rank": args.max_lora_rank,
