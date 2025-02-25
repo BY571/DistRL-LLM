@@ -11,6 +11,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from unsloth import FastLanguageModel
 from unsloth_zoo.vllm_utils import load_lora
 from vllm import SamplingParams
+from tqdm import tqdm  # Add this import at the top of your file
 
 DTYPE = torch.bfloat16
 LOAD_IN_4BIT = True
@@ -72,7 +73,7 @@ class BaseActor:
         self, actor_type, model_name, gpu_id, config, gen_config=None, gpu_usage=0.7
     ):
         self.actor_type = actor_type
-        self.max_seq_length = 300 + config["max_new_tokens"] # 300 for prompt +/-
+        self.max_seq_length = config["max_prompt_tokens"] + config["max_new_tokens"]
         self.dtype = DTYPE
         self.load_in_4bit = LOAD_IN_4BIT
         self.model_gpu_id = gpu_id
@@ -248,13 +249,15 @@ class Learner(BaseActor):
             self.policy.parameters(), lr=config["lr"]#, weight_decay=0.01
         )
         self.batch_size = config["batch_size"]
+        self.max_prompt_tokens = config["max_prompt_tokens"]
 
     def compute_current_policy_probs(self, policy, messages, answers):
         # recreate input with question and answer but we only compute the probabilities for the answer
         inputs = self.tokenizer.batch_encode_plus(
-            messages, return_tensors="pt", padding="longest", padding_side="left"
+            messages, return_tensors="pt", padding="max_length", padding_side="left", max_length=self.max_prompt_tokens, truncation=True
         ).to("cuda")
-        input_lens = inputs["attention_mask"].sum(-1).max()
+        #input_lens = inputs["attention_mask"].sum(-1).max()
+        input_lens = self.max_prompt_tokens
         tokenized_answer = self.tokenizer.batch_encode_plus(
             answers,
             return_tensors="pt",
@@ -283,7 +286,7 @@ class Learner(BaseActor):
         # Compute logprob only on answer token, -1 for the shift
         logits = logits[:, input_lens - 1 :] 
         input_ids = input_ids[:, input_lens - 1 :]
-
+        #print(f"Logits shape: {logits.shape}, Input ids shape: {input_ids.shape}")
         # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
         per_token_logps = []
         for logits_row, input_ids_row in zip(logits, input_ids):
@@ -307,7 +310,7 @@ class Learner(BaseActor):
 
         self.optimizer.zero_grad()
 
-        for i in range(num_batches):
+        for i in tqdm(range(num_batches), desc="Update Policy..."):
             start_idx = i * self.update_batch_size
             end_idx = min((i + 1) * self.update_batch_size, batch_size)
 
@@ -319,7 +322,7 @@ class Learner(BaseActor):
                 log_probs, mask = self.compute_current_policy_probs(
                     self.policy, batch_messages, batch_answers
                 )
-                # print(f"Batch {i+1}/{num_batches} Log probs: {log_probs.mean()}")
+                #print(f"Batch {i+1}/{num_batches} Log probs: {log_probs.mean().item():.4f}")
                 # Compute loss for current batch
                 loss = -(log_probs * batch_rewards.unsqueeze(-1))
 
@@ -351,6 +354,7 @@ class Learner(BaseActor):
                 problems.extend(p)
                 answers.extend(a)
                 rewards.extend(r - b)
+        print(f"Training on {len(problems)} samples")
         return self.compute_loss(
             problems,
             answers,
@@ -423,7 +427,7 @@ class GRPOLearner(BaseActor):
         ) // self.update_batch_size
 
         self.optimizer.zero_grad()
-        for i in range(num_batches):
+        for i in tqdm(range(num_batches), desc="Processing Batches"):
             start_idx = i * self.update_batch_size
             end_idx = min((i + 1) * self.update_batch_size, batch_size)
 
@@ -545,6 +549,6 @@ def create_actor_and_learner(
         scheduling_strategy=PlacementGroupSchedulingStrategy(
             placement_group=pg, placement_group_bundle_index=number_of_actors
         )
-    ).remote(model_name, learner_gpu_id, config, gen_config, gpu_usage=0.65)
+    ).remote(model_name, learner_gpu_id, config, gen_config, gpu_usage=0.35) # 0.65 for 14B
 
     return actors, learner
