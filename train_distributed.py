@@ -121,7 +121,7 @@ if __name__ == "__main__":
     )
     args.add_argument("--learner", type=str, choices=["pg", "grpo"], default="pg")
     args.add_argument("--max_lora_rank", type=int, default=64)
-    args.add_argument("--topk", type=int, default=6)
+    args.add_argument("--topk", type=int, default=8)
 
     args = args.parse_args()
 
