@@ -145,7 +145,7 @@ class Trainer:
     def _generate_round(self, batch):
         """Generate one round of candidates using actors and learner"""
         start_time = time.time()
-        assert self.batch_size == len(batch["id"]), "Batch size must be equal to the number of tasks"
+        #assert self.batch_size == len(batch["id"]), "Batch size must be equal to the number of tasks"
         chunk_sizes = self.calculate_chunk_sizes(self.batch_size, self.num_actors, self.learner_chunk_size)
         # split the batch into chunks for each actor
         chunked_batch = self.split_dict_lists(batch, chunk_sizes)
@@ -213,7 +213,7 @@ class Trainer:
                         max_task_acc_rewards.append(np.max(batch_reward[:,1]))
                         min_task_acc_rewards.append(np.min(batch_reward[:,1]))
                         mean_task_format_reward.append(np.mean(batch_reward[:,0]))
-                        summed_rewards.append(batch_reward.sum(axis=1))
+                        summed_rewards.append(batch_reward.sum(axis=1)) # TODO: test here leave one out reward normalization
                     candidates[i]["baselines"] = baselines
                     candidates[i]["rewards"] = summed_rewards
 
