@@ -9,7 +9,7 @@ from helper import init_peft_model
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from unsloth import FastLanguageModel
-from unsloth_zoo.vllm_utils import load_lora
+from unsloth_zoo.vllm_utils import load_lora, save_lora
 from vllm import SamplingParams
 from tqdm import tqdm  # Add this import at the top of your file
 
@@ -91,7 +91,7 @@ class BaseActor:
             self.sampling_params = SamplingParams(
                 max_tokens=self.max_new_tokens,
                 temperature=self.gen_config.temperature,
-                n=self.num_candidates,
+                #n=self.num_candidates,
             )
 
         self.policy = None
@@ -138,9 +138,27 @@ class BaseActor:
             raise
 
     def save_adapter(self, adapter_name="lora_request"):
-        self.policy.save_lora(adapter_name)
+        save_lora(self.policy, adapter_name)
         print(f"Adapter saved for {self.actor_type} {self.model_gpu_id}")
 
+    @staticmethod
+    def combine_lists(list_of_lists, num_candidate):
+        result = []
+        current_group = []
+        
+        for sublist in list_of_lists:
+            current_group.append(sublist[0])  # Assuming each sublist has only one element
+            
+            if len(current_group) == num_candidate:
+                result.append(current_group)
+                current_group = []
+        
+        # Handle any remaining items if list length isn't a multiple of num_candidate
+        if current_group:
+            result.append(current_group)
+        
+        return result
+    
     @torch.no_grad()
     def base_generate(self, messages):
         raise NotImplementedError("Base generate needs to be updated")
@@ -183,10 +201,10 @@ class BaseActor:
             return [""], [0]
 
     def vllm_generate(self, task):
-
-        completions = self.policy.fast_generate(task["problem"],
+        msgs = [msg for msg in task["problem"] for _ in range(self.num_candidates)]
+        completions = self.policy.fast_generate(msgs,
                                                 self.sampling_params,
-                                                lora_request=self.policy.load_lora("lora_request"))
+                                                lora_request=load_lora(self.policy, "lora_request"))
         # stack outputs
         total_out_texts = []
         total_token_lengths = []
@@ -199,6 +217,10 @@ class BaseActor:
 
             total_out_texts.append(task_texts)
             total_token_lengths.append(task_token_lengths)
+
+        # NOTE: if we use the msg otherwise take this off
+        total_out_texts = self.combine_lists(total_out_texts, self.num_candidates)
+        total_token_lengths = self.combine_lists(total_token_lengths, self.num_candidates)
 
         task["answers"] = total_out_texts
         task["token_lengths"] = total_token_lengths
@@ -299,6 +321,23 @@ class Learner(BaseActor):
         action_log_probs = torch.stack(per_token_logps)
         return action_log_probs, answer_mask
 
+    @staticmethod
+    def compute_entropy_bonus(log_probs, alpha):
+        """
+        Computes the entropy bonus for reinforcement learning loss.
+
+        Args:
+            log_probs (torch.Tensor): Log probabilities of shape (batch_size, sequence_length, vocab_size).
+            alpha (float): Entropy weighting coefficient.
+
+        Returns:
+            torch.Tensor: Scalar entropy bonus value.
+        """
+        probs = log_probs.exp()  # Convert log probabilities to probabilities
+        entropy = -(probs * log_probs).sum(dim=-1)  # Sum over vocabulary dimension
+        entropy_bonus = alpha * entropy.mean()  # Take mean over batch and sequence length
+        return entropy_bonus
+
     def compute_loss(self, messages, answers, rewards):
         rewards = torch.tensor(rewards).to("cuda")
 
@@ -317,17 +356,20 @@ class Learner(BaseActor):
             batch_messages = messages[start_idx:end_idx]
             batch_answers = answers[start_idx:end_idx]
             batch_rewards = rewards[start_idx:end_idx]
-
+            if batch_rewards.all() == 0:
+                # skip if batched rewards are 0
+                continue
             with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
                 log_probs, mask = self.compute_current_policy_probs(
                     self.policy, batch_messages, batch_answers
                 )
-                #print(f"Batch {i+1}/{num_batches} Log probs: {log_probs.mean().item():.4f}")
-                # Compute loss for current batch
-                loss = -(log_probs * batch_rewards.unsqueeze(-1))
-
                 # mask padding parts out and normalize and take mean over batch
-                loss = ((loss * mask).sum(-1) / mask.sum(-1)).mean()
+                loss = -(((log_probs * mask).sum(-1) / mask.sum(-1)) * batch_rewards).mean()
+
+                # TODO: add entropy here
+                #entropy = self.compute_entropy_bonus(log_probs, alpha=0.01)
+                #loss = loss + entropy
+                
                 # Scale the loss by the number of batches to maintain the same overall magnitude
                 loss = loss / num_batches
 
