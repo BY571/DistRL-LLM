@@ -11,7 +11,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from unsloth import FastLanguageModel
 from unsloth_zoo.vllm_utils import load_lora, save_lora
 from vllm import SamplingParams
-from tqdm import tqdm  # Add this import at the top of your file
+from tqdm import tqdm
 
 DTYPE = torch.bfloat16
 LOAD_IN_4BIT = True
@@ -148,8 +148,6 @@ class BaseActor:
             return [""], [0]
 
     def vllm_generate(self, task, sampling_params=None):
-        # TODO test without messages. should work without. NOTE when testing take off the self.combine_lists below!
-        #msgs = [msg for msg in task["problem"] for _ in range(self.num_candidates)]
         completions = self.policy.fast_generate(task["problem"],
                                                 sampling_params=self.sampling_params if sampling_params is None else sampling_params,
                                                 lora_request=load_lora(self.policy, self.lora_save_path))
@@ -167,16 +165,11 @@ class BaseActor:
             total_out_texts.append(task_texts)
             total_token_lengths.append(task_token_lengths)
 
-        # NOTE: if we use the msg otherwise take this off
-        # total_out_texts = self.combine_lists(total_out_texts, self.num_candidates)
-        # total_token_lengths = self.combine_lists(total_token_lengths, self.num_candidates)
-
         task["answers"] = total_out_texts
         task["token_lengths"] = total_token_lengths
         # adapt solutions and task id and problem
         # for solution in task["solution"] repeat it self.num_candidates times so we have lists per task, problem, solution etc
         task["solution"] = [[s for _ in range(sampled_candidates)] for s in task["solution"]]
-        task["id"] = [[i for _ in range(sampled_candidates)] for i in task["id"]]
         task["problem"] = [[p for _ in range(sampled_candidates)] for p in task["problem"]]
 
         return task

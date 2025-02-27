@@ -150,21 +150,21 @@ class Trainer:
 
     def _generate_all_candidates(self, batch, sampling_params=None):
         # Generate and evaluate candidates for each round
-        for _ in range(self.max_monkey_rounds):
-            candidates, generation_duration = self._generate_round(batch, sampling_params)
-            candidates, reward_duration = self._compute_round_rewards(candidates)
+        candidates, generation_duration = self._generate_round(batch, sampling_params)
+        candidates, reward_duration = self._compute_round_rewards(candidates)
 
         return candidates, generation_duration, reward_duration
 
     def _generate_round(self, batch, sampling_params=None):
         """Generate one round of candidates using actors and learner"""
         start_time = time.time()
-        #assert self.batch_size == len(batch["id"]), "Batch size must be equal to the number of tasks"
-        batch_size = len(batch["problem"]) # needs to adapt for last dataloader batch might missmatch inital batch size
+        if len(batch["problem"]) != self.batch_size:
+            print(f"Warning: Actual batch size ({batch_size}) differs from configured batch size ({self.batch_size})")
+            batch_size = len(batch["problem"]) # needs to adapt for last dataloader batch that might missmatch inital batch size
+        # Compute how to chunk the batch size across actors, creates a list of individual batch sizes per actor
         chunk_sizes = self.calculate_chunk_sizes(batch_size, self.num_actors, self.learner_chunk_size)
-        # split the batch into chunks for each actor
+        # split the inital batch into chunks for each actor
         chunked_batch = self.split_dict_lists(batch, chunk_sizes)
-        # TODO: we should split them equally across the actors also we may or may not want to use the learner
         actor_tasks = [
             actor.generate.remote(task, sampling_params)
             for actor, task in zip(self.actors, chunked_batch[: self.num_actors])
@@ -205,9 +205,9 @@ class Trainer:
         if self.eval_every > 0:
             self.evaluate(wandb=run, total_steps=total_batch_steps)
 
-        for episode in tqdm(range(self.episodes), desc="PG Training ..."):
+        for episode in tqdm(range(self.episodes), desc="Training ..."):
             self.dataset = self.dataset.shuffle()
-            loader = self.dataset.iter(batch_size=self.batch_size, drop_last_batch=True)
+            loader = self.dataset.iter(batch_size=self.batch_size)
 
             for batch in loader:
                 total_batch_steps += 1

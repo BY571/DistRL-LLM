@@ -3,109 +3,50 @@ import argparse
 import numpy as np
 from datasets import load_dataset
 from distributed_trainer import Trainer
-from helper import process_dataset
-from prompts import r0_preprompt, r1_preprompt
-from reward_function import EVAL_FUNCTIONS, extract_between_tokens
+from helper import process_dataset, r1_preprompt
 from unsloth.tokenizer_utils import load_correct_tokenizer
-
-REWARD_FORMAT = 0.1
-REWARD_FORMAT_PARSED = 0.1
-
-def format_reward(completions):
-    """Reward function that checks if the completion has a specific format."""
-    format_rewards = []
-    extracted_answers = []
-    extracted_thoughts = []
-    for c in completions:
-        think = extract_between_tokens(c, "<think>", "</think>")
-        answer = extract_between_tokens(c, "<answer>", "</answer>")
-        reward = REWARD_FORMAT
-        if len(answer) == 0 or len(think) == 0:#one of the two was not parsed correctly
-            reward = 0.0
-            think = answer = ""
-        format_rewards.append(reward)
-        extracted_answers.append(answer)
-        extracted_thoughts.append(think)
-    return format_rewards, extracted_answers, extracted_thoughts
-
-
-def assign_rewards(solutions, extracted_answers, extracted_thoughts):
-    """Reward function that checks if the completion is the same as the ground truth."""
-    accuracy_rewards = []
-    format_rewards = []
-    problem_types = []
-
-    for answer, sol in zip(extracted_answers, solutions):
-        try:
-            fxn_name, ideal, problem_type = sol.split("!:!", 2)
-            if answer == "": # extracted answer not parsed correctly
-                format_reward = 0.0
-                accuracy_reward = 0.0
-            else: # parsed correctly
-                reward = EVAL_FUNCTIONS[fxn_name](answer, ideal)
-                format_reward = REWARD_FORMAT
-                accuracy_reward = reward
-        except Exception: # eval function failed, but it did parse correctly
-            format_reward = REWARD_FORMAT_PARSED
-            accuracy_reward = 0.0
-            problem_type = None
-
-        format_rewards.append(format_reward)
-        accuracy_rewards.append(accuracy_reward)
-        problem_types.append(problem_type)
-
-    return accuracy_rewards, format_rewards, problem_types
-
-
-def reward_function(completions, solutions):
-    _, extracted_answers, extracted_thoughts = format_reward(completions=completions)
-    acc_reward, form_reward, problem_types = assign_rewards(
-        solutions=solutions,
-        extracted_answers=extracted_answers,
-        extracted_thoughts=extracted_thoughts,
-    )
-    return np.array(list(zip(form_reward, acc_reward)))
+from reward_functions import reward_function
 
 
 if __name__ == "__main__":
     args = argparse.ArgumentParser()
-    args.add_argument("--model", type=str, default="unsloth/Qwen2.5-14B-Instruct-bnb-4bit")
-    args.add_argument("--dataset", type=str, default="easy", choices=["train", "easy"])
-    args.add_argument("--task", type=str, default="reaction-prediction", choices=["all", "molecule-completion", "reaction-prediction", "molecule-name"])
-    args.add_argument("--run_name", type=str)  # forcing to be set by user
-    args.add_argument("--project_name", type=str, default="chem-reason")
-    args.add_argument("--lora_save_path", type=str, default="lora_request_test")
+    args.add_argument("--model", type=str, default="unsloth/Qwen2.5-7B-Instruct-bnb-4bit")
+    args.add_argument("--dataset", type=str, default="HuggingFaceH4/MATH-500")
+    args.add_argument("--run_name", type=str)
+    args.add_argument("--project_name", type=str, default="math-reasoning")
+    args.add_argument("--lora_save_path", type=str, default="lora_request_math")
     args.add_argument("--lr", type=float, default=2e-5)
-    args.add_argument("--max_new_tokens", type=int, default=700)
-    args.add_argument("--max_prompt_tokens", type=int, default=331) # 303 for easy
+    args.add_argument("--max_new_tokens", type=int, default=1200)
+    args.add_argument("--max_prompt_tokens", type=int, default=350) # max: 865, mean 144
     args.add_argument("--temperature", type=float, default=0.8) # TODO: test >1 
     args.add_argument("--episodes", type=int, default=20)
     args.add_argument("--num_candidates", type=int, default=16, help="Number of sampled candidate per monkey iteration")
     args.add_argument("--batch_size", type=int, default=32, help="Total batch size for all actors and learner that is later split into chunks") # 224 total per learner 
     args.add_argument("--learner_chunk_size", type=int, default=6, help="Number of samples per learner chunk")
-    args.add_argument("--train_batch_size", type=int, default=4) # 8 
-    args.add_argument("--max_monkey_rounds", type=int, default=1, help="Number of generation rounds to sample candidates")
+    args.add_argument("--train_batch_size", type=int, default=8)
     args.add_argument("--save_every", type=int, default=100, help="Save the model every x training steps")
     args.add_argument("--eval_every", type=int, default=10, help="Evaluate the model every x training steps")
-    args.add_argument("--number_of_actors", type=int, default=3, help="Number of actors to use, default is 0. Only uses the learner to generate and train.")
+    args.add_argument("--number_of_actors", type=int, default=2, help="Number of actors to use, default is 0. Only uses the learner to generate and train.")
     args.add_argument("--learner", type=str, choices=["pg", "grpo"], default="pg")
     args.add_argument("--max_lora_rank", type=int, default=64)
-    args.add_argument("--topk", type=int, default=6)
+    args.add_argument("--topk", type=int, default=6, help="Number of top k generated candidates per task to consider to consider for training, filtered based on reward") 
 
     args = args.parse_args()
 
     if args.number_of_actors == 0:
         assert args.batch_size == 1, "Batch size must be 1 if number of actors is 0"
 
-    raw_dataset = load_dataset("Acellera/molrqa", token="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")
+    raw_dataset = load_dataset(args.dataset)["test"] # math only has test
     
-    if args.task != "all":
-        raw_dataset = raw_dataset.filter(lambda x: args.task in x["problem_type"])
+    # drop initial solution colum and rename answer column to solution
+    raw_dataset = raw_dataset.map(lambda x: {"solution": x["answer"], "answer": x["answer"]})
+    raw_dataset = raw_dataset.remove_columns(["answer"])
+    
+    train_dataset, test_dataset = raw_dataset.train_test_split(test_size=0.1)
 
-    raw_train_dataset = raw_dataset[args.dataset]  #easy or train
-    raw_eval_dataset = raw_dataset["test"].select(range(0, 100))  
     
-    print(f"\nNumber of train samples: {len(raw_train_dataset)}\n\n")    
+    print(f"\nNumber of train samples: {len(train_dataset)}\n\n")
+    print(f"\nNumber of test samples: {len(test_dataset)}\n\n")
 
 
     config = {
@@ -120,7 +61,6 @@ if __name__ == "__main__":
         "batch_size": args.batch_size,
         "train_batch_size": args.train_batch_size,
         "temperature": args.temperature,
-        "max_monkey_rounds": args.max_monkey_rounds,
         "save_every": args.save_every,
         "eval_every": args.eval_every,
         "model": args.model,
@@ -136,13 +76,8 @@ if __name__ == "__main__":
     # TODO: ugly that we need to load the tokenizer before
     tokenizer = load_correct_tokenizer(args.model)
     # process dataset
-    if args.task == "reaction-prediction":
-        postprompt = "Answer with the SMILES of the product."
-    else:
-        postprompt = ""
-
-    train_dataset = process_dataset(tokenizer, raw_train_dataset, r1_preprompt, postprompt)
-    test_dataset = process_dataset(tokenizer, raw_eval_dataset, r1_preprompt, postprompt)
+    train_dataset = process_dataset(tokenizer, train_dataset, preprompt=r1_preprompt, postprompt="")
+    test_dataset = process_dataset(tokenizer, test_dataset, preprompt=r1_preprompt, postprompt="")
 
     trainer = Trainer(train_dataset, test_dataset, reward_function, config)
     trainer.train()
