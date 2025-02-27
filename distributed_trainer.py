@@ -39,10 +39,9 @@ class Trainer:
         self.batch_size = config["batch_size"]
         self.learner_chunk_size = config["learner_chunk_size"]
         self.num_candidates = config["num_candidates"]
-        self.max_monkey_rounds = config["max_monkey_rounds"]
         self.save_every = config["save_every"]
         self.eval_every = config["eval_every"]
-        self.topk = config["topk"]
+        self.topk = config["topk"]  
         self.run_name = config["run_name"]
         self.project_name = config["project_name"]
         self.run_directory = f"run_{self.run_name}"
@@ -52,6 +51,7 @@ class Trainer:
             temperature=0.6, # we want deterministic behavior at eval, do we?
             max_tokens=config["max_new_tokens"],
             top_p=0.95,
+            n=8,
         )
 
     def save_solutions(
@@ -161,6 +161,8 @@ class Trainer:
         if len(batch["problem"]) != self.batch_size:
             print(f"Warning: Actual batch size ({batch_size}) differs from configured batch size ({self.batch_size})")
             batch_size = len(batch["problem"]) # needs to adapt for last dataloader batch that might missmatch inital batch size
+        else:
+            batch_size = self.batch_size
         # Compute how to chunk the batch size across actors, creates a list of individual batch sizes per actor
         chunk_sizes = self.calculate_chunk_sizes(batch_size, self.num_actors, self.learner_chunk_size)
         # split the inital batch into chunks for each actor
@@ -299,12 +301,12 @@ class Trainer:
             )
         # cleanup
         ray.shutdown()
-
-
+        
     def evaluate(self, wandb, total_steps,):
         eval_loader = self.test_dataset.iter(batch_size=self.batch_size)
 
         total_passed = 0
+        total_max_passed = 0
         total_problems = 0
         total_token_length = []
 
@@ -315,14 +317,17 @@ class Trainer:
             )
 
             for candidate in eval_candidates:
-                batch_rewards = np.vstack(candidate["rewards"])
-                token_lengths = np.vstack(candidate["token_lengths"])
-                total_token_length.append(np.mean(token_lengths))
-                accuracy_reward = batch_rewards[:, 1]
-                total_passed += accuracy_reward.sum()
-                total_problems += batch_rewards.shape[0]
+                for r, token in zip(candidate["rewards"], candidate["token_lengths"]):
+
+                    total_token_length.append(np.mean(token))
+                    accuracy_reward = np.mean(r[:, 1])
+                    total_passed += accuracy_reward
+                    total_max_passed += np.max(r[:, 1])
+                    total_problems += 1
 
         overall_pass_rate = total_passed / total_problems
+        overall_max_pass_rate = total_max_passed / total_problems
         overall_token_length = np.mean(total_token_length)
-        wandb.log({f"eval/pass@1": overall_pass_rate, "eval/mean_token_length": overall_token_length},step=total_steps,)
-        
+        wandb.log({f"eval/pass@1(mean{self.eval_sampling_params.n})": overall_pass_rate,
+                   f"eval/boN({self.eval_sampling_params.n})": overall_max_pass_rate,
+                   "eval/mean_token_length": overall_token_length},step=total_steps,)
