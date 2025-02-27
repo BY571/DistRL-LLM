@@ -17,55 +17,10 @@ DTYPE = torch.bfloat16
 LOAD_IN_4BIT = True
 
 
-# Function used from trl.trainer.utils import selective_log_softmax
-def selective_log_softmax(logits, index):
-    """
-    A memory-efficient implementation of the common `log_softmax -> gather` operation.
-
-    This function is equivalent to the following naive implementation:
-    ```python
-    logps = torch.gather(logits.log_softmax(-1), dim=-1, index=index.unsqueeze(-1)).squeeze(-1)
-    ```
-
-    Args:
-        logits (`torch.Tensor`):
-            Logits tensor of shape `(..., num_classes)`.
-        index (`torch.Tensor`):
-            Index tensor of shape `(...)`, specifying the positions to gather from the log-softmax output.
-
-    Returns:
-        `torch.Tensor`:
-            Gathered log probabilities with the same shape as `index`.
-    """
-    if logits.dtype in [torch.float32, torch.float64]:
-        selected_logits = torch.gather(
-            logits, dim=-1, index=index.unsqueeze(-1)
-        ).squeeze(-1)
-        # loop to reduce peak mem consumption
-        logsumexp_values = torch.stack([torch.logsumexp(lg, dim=-1) for lg in logits])
-        per_token_logps = (
-            selected_logits - logsumexp_values
-        )  # log_softmax(x_i) = x_i - logsumexp(x)
-    else:
-        # logsumexp approach is unstable with bfloat16, fall back to slightly less efficent approach
-        per_token_logps = []
-        for row_logits, row_labels in zip(
-            logits, index
-        ):  # loop to reduce peak mem consumption
-            row_logps = F.log_softmax(row_logits, dim=-1)
-            row_per_token_logps = row_logps.gather(
-                dim=-1, index=row_labels.unsqueeze(-1)
-            ).squeeze(-1)
-            per_token_logps.append(row_per_token_logps)
-        per_token_logps = torch.stack(per_token_logps)
-    return per_token_logps
-
-
 def chunked(iterable, num_chunks):
     size = len(iterable) // num_chunks  # Calculate chunk size based on total length
     it = iter(iterable)
     return [list(islice(it, size)) for _ in range(num_chunks)]
-
 
 
 class BaseActor:
@@ -83,6 +38,7 @@ class BaseActor:
         self.num_candidates = gen_config.num_return_sequences
         self.use_vllm = config["use_vllm"]
         self.max_lora_rank = config["max_lora_rank"]
+        self.lora_save_path = config["lora_save_path"]
         self.max_gpu_usage = gpu_usage
         assert self.max_new_tokens == self.gen_config.max_new_tokens
 
@@ -91,7 +47,7 @@ class BaseActor:
             self.sampling_params = SamplingParams(
                 max_tokens=self.max_new_tokens,
                 temperature=self.gen_config.temperature,
-                #n=self.num_candidates,
+                n=self.num_candidates,
             )
 
         self.policy = None
@@ -128,18 +84,9 @@ class BaseActor:
             # Clean up any partially initialized state
             raise
 
-    def load_adapter(self, adapter_path="lora_request"):
-        try:
-            lora_request = load_lora(self.policy, adapter_path)
-            self.policy.vllm_engine.vllm_lora_request = lora_request
-            print(f"Adapter loaded for {self.actor_type} {self.model_gpu_id}")
-        except Exception as e:
-            print(f"Error loading adapter from {adapter_path}: {str(e)}")
-            raise
-
-    def save_adapter(self, adapter_name="lora_request"):
-        save_lora(self.policy, adapter_name)
-        print(f"Adapter saved for {self.actor_type} {self.model_gpu_id}")
+    def save_adapter(self, ):
+        save_lora(self.policy, self.lora_save_path)
+        print(f"Adapter saved for {self.actor_type} {self.model_gpu_id} at {self.lora_save_path}")
 
     @staticmethod
     def combine_lists(list_of_lists, num_candidate):
@@ -200,11 +147,13 @@ class BaseActor:
             print(f"Detailed error: {str(e)}")
             return [""], [0]
 
-    def vllm_generate(self, task):
-        msgs = [msg for msg in task["problem"] for _ in range(self.num_candidates)]
-        completions = self.policy.fast_generate(msgs,
-                                                self.sampling_params,
-                                                lora_request=load_lora(self.policy, "lora_request"))
+    def vllm_generate(self, task, sampling_params=None):
+        # TODO test without messages. should work without. NOTE when testing take off the self.combine_lists below!
+        #msgs = [msg for msg in task["problem"] for _ in range(self.num_candidates)]
+        completions = self.policy.fast_generate(task["problem"],
+                                                sampling_params=self.sampling_params if sampling_params is None else sampling_params,
+                                                lora_request=load_lora(self.policy, self.lora_save_path))
+        sampled_candidates = sampling_params.n if sampling_params is not None else self.num_candidates
         # stack outputs
         total_out_texts = []
         total_token_lengths = []
@@ -219,24 +168,24 @@ class BaseActor:
             total_token_lengths.append(task_token_lengths)
 
         # NOTE: if we use the msg otherwise take this off
-        total_out_texts = self.combine_lists(total_out_texts, self.num_candidates)
-        total_token_lengths = self.combine_lists(total_token_lengths, self.num_candidates)
+        # total_out_texts = self.combine_lists(total_out_texts, self.num_candidates)
+        # total_token_lengths = self.combine_lists(total_token_lengths, self.num_candidates)
 
         task["answers"] = total_out_texts
         task["token_lengths"] = total_token_lengths
         # adapt solutions and task id and problem
         # for solution in task["solution"] repeat it self.num_candidates times so we have lists per task, problem, solution etc
-        task["solution"] = [[s for _ in range(self.num_candidates)] for s in task["solution"]]
-        task["id"] = [[i for _ in range(self.num_candidates)] for i in task["id"]]
-        task["problem"] = [[p for _ in range(self.num_candidates)] for p in task["problem"]]
+        task["solution"] = [[s for _ in range(sampled_candidates)] for s in task["solution"]]
+        task["id"] = [[i for _ in range(sampled_candidates)] for i in task["id"]]
+        task["problem"] = [[p for _ in range(sampled_candidates)] for p in task["problem"]]
 
         return task
 
-    def generate(self, messages):
+    def generate(self, messages, sampling_params=None):
         # TODO: check if messages is always a single sting!
         FastLanguageModel.for_inference(self.policy)
         if self.use_vllm:
-            return self.vllm_generate(messages)
+            return self.vllm_generate(messages, sampling_params)
         else:
             return self.base_generate(messages)
 
@@ -267,8 +216,11 @@ class Learner(BaseActor):
         )
         # Note: With 8-bit optimizers, large models can be finetuned with 75% less GPU memory without losing any accuracy compared to training with standard 32-bit optimizer
         # https://huggingface.co/docs/bitsandbytes/optimizers
-        self.optimizer = torch.optim.Adam(
-            self.policy.parameters(), lr=config["lr"]#, weight_decay=0.01
+        # self.optimizer = torch.optim.Adam(
+        #     self.policy.parameters(), lr=config["lr"]#, weight_decay=0.01
+        # )
+        self.optimizer = bnb.optim.Adam8bit(
+            self.policy.parameters(), lr=config["lr"]#, weight_decay=0.1
         )
         self.batch_size = config["batch_size"]
         self.max_prompt_tokens = config["max_prompt_tokens"]
@@ -320,6 +272,9 @@ class Learner(BaseActor):
             per_token_logps.append(token_log_prob)
         action_log_probs = torch.stack(per_token_logps)
         return action_log_probs, answer_mask
+
+    def save_checkpoint(self, path):
+        self.policy.save_pretrained(path)
 
     @staticmethod
     def compute_entropy_bonus(log_probs, alpha):
@@ -578,7 +533,7 @@ def create_actor_and_learner(
             scheduling_strategy=PlacementGroupSchedulingStrategy(
                 placement_group=pg, placement_group_bundle_index=i
             )
-        ).remote(model_name, gpu_id, config, gen_config, gpu_usage=0.92)
+        ).remote(model_name, gpu_id, config, gen_config, gpu_usage=0.91)
         actors.append(actor)
     time.sleep(5)
     assert config["learner"] in ["grpo", "pg"], "Learner can be only 'pg' or 'grpo'!"
@@ -591,6 +546,6 @@ def create_actor_and_learner(
         scheduling_strategy=PlacementGroupSchedulingStrategy(
             placement_group=pg, placement_group_bundle_index=number_of_actors
         )
-    ).remote(model_name, learner_gpu_id, config, gen_config, gpu_usage=0.35) # 0.65 for 14B
+    ).remote(model_name, learner_gpu_id, config, gen_config, gpu_usage=0.65) # 0.65 for 14B
 
     return actors, learner
