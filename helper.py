@@ -8,7 +8,7 @@ r1_preprompt = (
     "<answer> answer here </answer>\n"
 )
 
-def process_dataset(tokenizer, dataset, preprompt, postprompt):
+def process_dataset(tokenizer, dataset, preprompt="", postprompt=""):
     def generate_messages(examples):
 
         messages = [[{"role": "system", "content": preprompt}, {"role": "user", "content": p+' '+ postprompt}] for p in examples["problem"]]
