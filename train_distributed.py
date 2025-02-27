@@ -42,8 +42,11 @@ if __name__ == "__main__":
     raw_dataset = raw_dataset.map(lambda x: {"solution": x["answer"], "answer": x["answer"]})
     raw_dataset = raw_dataset.remove_columns(["answer"])
     
-    train_dataset, test_dataset = raw_dataset.train_test_split(test_size=0.1)
-
+    raw_dataset = raw_dataset.train_test_split(test_size=0.1)
+    # TODO: ugly that we need to load the tokenizer before
+    tokenizer = load_correct_tokenizer(args.model)
+    train_dataset = process_dataset(tokenizer, raw_dataset["train"], r1_preprompt, postprompt="")
+    test_dataset = process_dataset(tokenizer, raw_dataset["test"], r1_preprompt, postprompt="")
     
     print(f"\nNumber of train samples: {len(train_dataset)}\n\n")
     print(f"\nNumber of test samples: {len(test_dataset)}\n\n")
@@ -73,11 +76,6 @@ if __name__ == "__main__":
         "learner_chunk_size": args.learner_chunk_size,
     }
 
-    # TODO: ugly that we need to load the tokenizer before
-    tokenizer = load_correct_tokenizer(args.model)
-    # process dataset
-    train_dataset = process_dataset(tokenizer, train_dataset, preprompt=r1_preprompt, postprompt="")
-    test_dataset = process_dataset(tokenizer, test_dataset, preprompt=r1_preprompt, postprompt="")
 
     trainer = Trainer(train_dataset, test_dataset, reward_function, config)
     trainer.train()

@@ -3,7 +3,7 @@ import time
 import numpy as np
 import ray
 import wandb
-from distributed_actors import create_actor_and_learner
+from distributed_actor import create_actor_and_learner
 from tqdm import tqdm
 from transformers import GenerationConfig
 import os
@@ -290,11 +290,11 @@ class Trainer:
 
                 # save policy
                 if total_batch_steps % self.save_every == 0:
-                    ray.get(self.learner.save_checkpoint.remote(os.path.join(self.run_directory, f"pg_model_{total_batch_steps}")))
+                    ray.get(self.learner.save_checkpoint.remote(os.path.join(self.run_directory, f"model_{total_batch_steps}")))
 
             # save final policy
             ray.get(
-                self.learner.save_checkpoint.remote(os.path.join(self.run_directory, f"pg_model_{total_batch_steps}")
+                self.learner.save_checkpoint.remote(os.path.join(self.run_directory, f"model_{total_batch_steps}")
                 )
             )
         # cleanup
