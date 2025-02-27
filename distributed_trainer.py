@@ -159,8 +159,8 @@ class Trainer:
         """Generate one round of candidates using actors and learner"""
         start_time = time.time()
         if len(batch["problem"]) != self.batch_size:
-            print(f"Warning: Actual batch size ({batch_size}) differs from configured batch size ({self.batch_size})")
             batch_size = len(batch["problem"]) # needs to adapt for last dataloader batch that might missmatch inital batch size
+            print(f"Warning: Actual batch size ({batch_size}) differs from configured batch size ({self.batch_size})")
         else:
             batch_size = self.batch_size
         # Compute how to chunk the batch size across actors, creates a list of individual batch sizes per actor
