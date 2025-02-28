@@ -8,16 +8,16 @@ Currently, it is configured for a simple math task, but can be extended to other
 
 ## 🚀 Features
 - Multi-GPU Training: Efficiently utilizes multiple GPUs for distributed RL-based fine-tuning.
-- Memory-Efficient Fine-Tuning: Uses Unsloth for reduced memory footprint.
-- Fast Inference: Leverages vLLM for high-throughput generation.
-- Scalable Distributed RL: Implements Ray to orchestrate multi-GPU workloads.
+- Memory-Efficient Fine-Tuning: Uses [Unsloth](https://github.com/unslothai/unsloth) for reduced memory footprint.
+- Fast Inference: Leverages [vLLM](https://github.com/vllm-project/vllm) for high-throughput generation.
+- Scalable Distributed RL: Implements [Ray](https://github.com/ray-project/ray) to orchestrate multi-GPU workloads.
 
 ### 🏗️ Architecture Overview
-This repository employs Ray for distributed computing with the following components:
+This repository employs [Ray](https://github.com/ray-project/ray) for distributed computing with the following components:
 - Actors: Generate candidate responses in parallel across multiple GPUs.
 - Learner: Updates the policy based on rewards (can also participate in generation to avoid idleness).
 - Trainer: Orchestrates the entire training pipeline.
-The system leverages vLLM for fast inference and Unsloth for memory-efficient fine-tuning, making it possible to train large language models with reinforcement learning on limited hardware. This architecture enables efficient multi-GPU utilization, significantly accelerating the training process.
+The system leverages [vLLM](https://github.com/vllm-project/vllm) for fast inference and [Unsloth](https://github.com/unslothai/unsloth) for memory-efficient fine-tuning, making it possible to train large language models with reinforcement learning on limited hardware. This architecture enables efficient multi-GPU utilization, significantly accelerating the training process.
 
 <details>
 <summary><h1>Setup</h1></summary>
