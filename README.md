@@ -22,7 +22,20 @@ The system leverages [vLLM](https://github.com/vllm-project/vllm) for fast infer
 <details>
 <summary><h1>Setup</h1></summary>
 
-<!-- Add your setup instructions here -->
+Create a new conda environment and install the dependencies:
+```bash
+conda create --name distrl \
+    python=3.11 \
+    pytorch-cuda=12.1 \
+    pytorch cudatoolkit xformers -c pytorch -c nvidia -c xformers \
+    -y
+conda activate distrl
+```
+
+Install the dependencies:
+```bash
+pip install -r requirements.txt
+```
 
 </details>
 
@@ -51,10 +64,14 @@ Currently, we have implemented a vanilla Policy Gradient algorithm and GRPO.
 
 
 
+<details>
+<summary><h1>Performance Tests</h1></summary>
 
-# Performance Tests
+Policy gradient training (~2hours)
 
+![Performance Tests PG](./media/initial_pg_test.png)
 
+</details>
 
 ## TODO:
 - Usually the bottleneck for RL with LLMs is the online data generation. However, with ray and vllm this is not a problem. Instead the bottleneck is now the learning as we can sample thousands of completions in parallel. *Can we parallelize the learning process?*
