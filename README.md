@@ -60,7 +60,7 @@ Currently, we have implemented a vanilla Policy Gradient algorithm and GRPO.
 | Algorithm | Description | Status |
 |-----------|-------------|--------|
 | Policy Gradient | Vanilla policy gradient implementation | ✅ Implemented |
-| GRPO | Generalized Reward-Weighted Policy Optimization | ✅ Implemented |
+| GRPO | Group Relative Policy Optimization ([1](https://arxiv.org/abs/2402.03300), [2](https://github.com/deepseek-ai/DeepSeek-R1/blob/main/DeepSeek_R1.pdf)) | ✅ Implemented |
 
 
 
