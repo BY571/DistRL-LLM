@@ -526,7 +526,7 @@ def create_actor_and_learner(
             scheduling_strategy=PlacementGroupSchedulingStrategy(
                 placement_group=pg, placement_group_bundle_index=i
             )
-        ).remote(model_name, gpu_id, config, gen_config, gpu_usage=0.91)
+        ).remote(model_name, gpu_id, config, gen_config, gpu_usage=config["actor_gpu_usage"])
         actors.append(actor)
     time.sleep(5)
     assert config["learner"] in ["grpo", "pg"], "Learner can be only 'pg' or 'grpo'!"
@@ -539,6 +539,6 @@ def create_actor_and_learner(
         scheduling_strategy=PlacementGroupSchedulingStrategy(
             placement_group=pg, placement_group_bundle_index=number_of_actors
         )
-    ).remote(model_name, learner_gpu_id, config, gen_config, gpu_usage=0.65) # 0.65 for 14B
+    ).remote(model_name, learner_gpu_id, config, gen_config, gpu_usage=config["learner_gpu_usage"]) # 0.65 for 14B
 
     return actors, learner

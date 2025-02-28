@@ -19,7 +19,7 @@ if __name__ == "__main__":
     args.add_argument("--max_new_tokens", type=int, default=1200)
     args.add_argument("--max_prompt_tokens", type=int, default=350) # max: 865, mean 144
     args.add_argument("--temperature", type=float, default=0.8) # TODO: test >1 
-    args.add_argument("--episodes", type=int, default=20)
+    args.add_argument("--episodes", type=int, default=15)
     args.add_argument("--num_candidates", type=int, default=16, help="Number of sampled candidate per monkey iteration")
     args.add_argument("--batch_size", type=int, default=32, help="Total batch size for all actors and learner that is later split into chunks") # 224 total per learner 
     args.add_argument("--learner_chunk_size", type=int, default=6, help="Number of samples per learner chunk")
@@ -28,9 +28,10 @@ if __name__ == "__main__":
     args.add_argument("--eval_every", type=int, default=10, help="Evaluate the model every x training steps")
     args.add_argument("--number_of_actors", type=int, default=2, help="Number of actors to use, default is 0. Only uses the learner to generate and train.")
     args.add_argument("--learner", type=str, choices=["pg", "grpo"], default="pg")
-    args.add_argument("--max_lora_rank", type=int, default=64)
+    args.add_argument("--max_lora_rank", type=int, default=32)
     args.add_argument("--topk", type=int, default=6, help="Number of top k generated candidates per task to consider to consider for training, filtered based on reward") 
-
+    args.add_argument("--actor_gpu_usage", type=float, default=0.91)
+    args.add_argument("--learner_gpu_usage", type=float, default=0.35)
     args = args.parse_args()
 
     if args.number_of_actors == 0:
@@ -74,6 +75,8 @@ if __name__ == "__main__":
         "max_lora_rank": args.max_lora_rank,
         "topk": args.topk,
         "learner_chunk_size": args.learner_chunk_size,
+        "actor_gpu_usage": args.actor_gpu_usage,
+        "learner_gpu_usage": args.learner_gpu_usage,
     }
 
 

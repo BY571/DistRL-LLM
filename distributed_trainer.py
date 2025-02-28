@@ -329,5 +329,5 @@ class Trainer:
         overall_max_pass_rate = total_max_passed / total_problems
         overall_token_length = np.mean(total_token_length)
         wandb.log({f"eval/pass@1(mean{self.eval_sampling_params.n})": overall_pass_rate,
-                   f"eval/boN({self.eval_sampling_params.n})": overall_max_pass_rate,
+                   f"eval/BoN({self.eval_sampling_params.n})": overall_max_pass_rate,
                    "eval/mean_token_length": overall_token_length},step=total_steps,)
