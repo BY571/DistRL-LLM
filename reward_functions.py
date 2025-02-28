@@ -17,6 +17,11 @@ def strict_format_reward_func(completions, **kwargs) -> list[float]:
     matches = [re.match(pattern, c) for c in completions]
     return [0.1 if match else 0.0 for match in matches]
 
+def soft_format_reward_func(completions, **kwargs) -> list[float]:
+    """Reward function that checks if the completion has a specific format."""
+    pattern = r"<think>.*?</think>\s*<answer>.*?</answer>"
+    matches = [re.match(pattern, c) for c in completions]
+    return [0.1 if match else 0.0 for match in matches]
 
 def count_xml(text) -> float:
     count = 0.0
