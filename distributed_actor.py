@@ -17,12 +17,6 @@ DTYPE = torch.bfloat16
 LOAD_IN_4BIT = True
 
 
-def chunked(iterable, num_chunks):
-    size = len(iterable) // num_chunks  # Calculate chunk size based on total length
-    it = iter(iterable)
-    return [list(islice(it, size)) for _ in range(num_chunks)]
-
-
 class BaseActor:
     def __init__(
         self, actor_type, model_name, gpu_id, config, gen_config=None, gpu_usage=0.7
@@ -314,7 +308,7 @@ class Learner(BaseActor):
                 # mask padding parts out and normalize and take mean over batch
                 loss = -(((log_probs * mask).sum(-1) / mask.sum(-1)) * batch_rewards).mean()
 
-                # TODO: add entropy here
+                # TODO: test add entropy here
                 #entropy = self.compute_entropy_bonus(log_probs, alpha=0.01)
                 #loss = loss + entropy
                 
@@ -368,13 +362,16 @@ class GRPOLearner(BaseActor):
         self.optimizer = bnb.optim.Adam8bit(
             self.policy.parameters(), lr=config["lr"]#, weight_decay=0.1
         )
-        self.beta = 0.1  # 0.4
+        self.batch_size = config["batch_size"]
+        self.max_prompt_tokens = config["max_prompt_tokens"]
 
     def compute_current_policy_probs(self, policy, messages, answers):
         # recreate input with question and answer but we only compute the probabilities for the answer
         inputs = self.tokenizer.batch_encode_plus(
-            messages, return_tensors="pt", padding="longest", padding_side="left"
+            messages, return_tensors="pt", padding="max_length", padding_side="left", max_length=self.max_prompt_tokens, truncation=True
         ).to("cuda")
+        #input_lens = inputs["attention_mask"].sum(-1).max()
+        input_lens = self.max_prompt_tokens
         tokenized_answer = self.tokenizer.batch_encode_plus(
             answers,
             return_tensors="pt",
@@ -385,7 +382,6 @@ class GRPOLearner(BaseActor):
         ).to("cuda")
         answer_mask = tokenized_answer["attention_mask"]
         # we only compute the logprob for the answers saves memory
-        logits_to_keep = tokenized_answer["input_ids"].size(1)
         # combine inputs and candidates
         full_inputs = torch.cat(
             [inputs["input_ids"], tokenized_answer["input_ids"]], dim=1
@@ -395,20 +391,50 @@ class GRPOLearner(BaseActor):
             dim=1,
         )
 
-        # Compute logits of the policy model
         logits = policy(
-            input_ids=full_inputs,
-            attention_mask=full_attention_mask,
-            logits_to_keep=logits_to_keep + 1,  # for shifting
+            input_ids=full_inputs, attention_mask=full_attention_mask
         ).logits
 
         logits = logits[:, :-1, :]  # shift the logits to the right by one token
-        input_ids = full_inputs[:, -logits_to_keep:]
-        logits = logits[:, -logits_to_keep:]
-        return selective_log_softmax(logits, input_ids), answer_mask
+        input_ids = full_inputs[:, 1:]  # remove the first token
+        # Compute logprob only on answer token, -1 for the shift
+        logits = logits[:, input_lens - 1 :] 
+        input_ids = input_ids[:, input_lens - 1 :]
+        #print(f"Logits shape: {logits.shape}, Input ids shape: {input_ids.shape}")
+        # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
+        per_token_logps = []
+        for logits_row, input_ids_row in zip(logits, input_ids):
+            log_probs = logits_row.log_softmax(dim=-1)
 
-    def compute_loss(self, messages, answers, advantage):
-        advantage = torch.tensor(advantage).to("cuda")
+            token_log_prob = torch.gather(
+                log_probs, dim=1, index=input_ids_row.unsqueeze(1)
+            ).squeeze(1)
+            per_token_logps.append(token_log_prob)
+        action_log_probs = torch.stack(per_token_logps)
+        return action_log_probs, answer_mask
+
+    def save_checkpoint(self, path):
+        self.policy.save_pretrained(path)
+
+    @staticmethod
+    def compute_entropy_bonus(log_probs, alpha):
+        """
+        Computes the entropy bonus for reinforcement learning loss.
+
+        Args:
+            log_probs (torch.Tensor): Log probabilities of shape (batch_size, sequence_length, vocab_size).
+            alpha (float): Entropy weighting coefficient.
+
+        Returns:
+            torch.Tensor: Scalar entropy bonus value.
+        """
+        probs = log_probs.exp()  # Convert log probabilities to probabilities
+        entropy = -(probs * log_probs).sum(dim=-1)  # Sum over vocabulary dimension
+        entropy_bonus = alpha * entropy.mean()  # Take mean over batch and sequence length
+        return entropy_bonus
+
+    def compute_loss(self, messages, answers, rewards):
+        rewards = torch.tensor(rewards).to("cuda")
 
         total_loss = 0
         batch_size = len(messages)
@@ -417,40 +443,31 @@ class GRPOLearner(BaseActor):
         ) // self.update_batch_size
 
         self.optimizer.zero_grad()
-        for i in tqdm(range(num_batches), desc="Processing Batches"):
+
+        for i in tqdm(range(num_batches), desc="Update Policy..."):
             start_idx = i * self.update_batch_size
             end_idx = min((i + 1) * self.update_batch_size, batch_size)
 
             batch_messages = messages[start_idx:end_idx]
             batch_answers = answers[start_idx:end_idx]
-            batch_advantages = advantage[start_idx:end_idx]
-
+            batch_rewards = rewards[start_idx:end_idx]
+            if batch_rewards.all() == 0:
+                # skip if batched rewards are 0
+                continue
             with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-                # compute reference logprobs
-                with torch.no_grad():
-                    with self.policy.disable_adapter():
-                        ref_log_prob, mask = self.compute_current_policy_probs(
-                            self.policy, batch_messages, batch_answers
-                        )
-
                 log_probs, mask = self.compute_current_policy_probs(
                     self.policy, batch_messages, batch_answers
                 )
-                # print(f"Batch {i+1}/{num_batches} Log probs: {log_probs.mean()}")
 
-                per_token_kl = (
-                    torch.exp(ref_log_prob - log_probs) - (ref_log_prob - log_probs) - 1
-                )
-                # print("KL: ", per_token_kl.mean())
-                # Compute loss for current batch
-                loss = torch.exp(
-                    log_probs - log_probs.detach()
-                ) * batch_advantages.unsqueeze(1)
+                importance_logprob = torch.exp(log_probs - log_probs.detach())
 
-                loss = -(loss - self.beta * per_token_kl)
+                # mask padding parts out and normalize and take mean over batch
+                loss = -(((importance_logprob * mask).sum(-1) / mask.sum(-1)) * batch_rewards).mean()
 
-                loss = ((loss * mask).sum(-1) / mask.sum(-1)).mean()
-
+                # TODO: test add entropy here
+                #entropy = self.compute_entropy_bonus(log_probs, alpha=0.01)
+                #loss = loss + entropy
+                
                 # Scale the loss by the number of batches to maintain the same overall magnitude
                 loss = loss / num_batches
 
@@ -467,12 +484,22 @@ class GRPOLearner(BaseActor):
 
         return total_loss
 
-    def train(self, messages, answers, rewards):
+    def train(self, candidates):
         FastLanguageModel.for_training(self.policy)
-        advantage = (
-            (rewards - np.mean(rewards, axis=0)) / (np.std(rewards, axis=0) + 1e-10)
-        ).sum(axis=-1)
-        return self.compute_loss(messages, answers, advantage)
+        problems = []
+        answers = []
+        rewards = []
+        for candidate in candidates:
+            for a, p, r in zip(candidate["answers"], candidate["problem"], candidate["rewards"]):
+                problems.extend(p)
+                answers.extend(a)
+                rewards.extend(r)
+        print(f"Training on {len(problems)} samples")
+        return self.compute_loss(
+            problems,
+            answers,
+            rewards,
+        )
 
 
 def create_actor_and_learner(

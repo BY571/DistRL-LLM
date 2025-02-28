@@ -45,6 +45,7 @@ class Trainer:
         self.run_name = config["run_name"]
         self.project_name = config["project_name"]
         self.run_directory = f"run_{self.run_name}"
+        self.learner_type = config["learner"]
 
 
         self.eval_sampling_params = SamplingParams(
@@ -226,6 +227,7 @@ class Trainer:
                 for i, candidate in enumerate(candidates):
                     baselines = []
                     summed_rewards = []
+                    advantages = []
                     for batch_reward, batch_token_length in zip(candidate["rewards"], candidate["token_lengths"]):
                         baselines.append(np.mean(batch_reward.sum(axis=1)))
                         mean_task_acc_rewards.append(np.mean(batch_reward[:,1]))
@@ -233,9 +235,13 @@ class Trainer:
                         max_task_acc_rewards.append(np.max(batch_reward[:,1]))
                         min_task_acc_rewards.append(np.min(batch_reward[:,1]))
                         mean_task_format_reward.append(np.mean(batch_reward[:,0]))
+                        advantages.append((batch_reward.sum(axis=1) -np.mean(batch_reward.sum(axis=1))) / (np.std(batch_reward.sum(axis=1)) + 1e-8))
                         summed_rewards.append(batch_reward.sum(axis=1)) # TODO: test here leave one out reward normalization
-                    candidates[i]["baselines"] = baselines
-                    candidates[i]["rewards"] = summed_rewards
+                    if self.learner_type == "grpo":
+                        candidates[i]["rewards"] = advantages
+                    else:
+                        candidates[i]["baselines"] = baselines
+                        candidates[i]["rewards"] = summed_rewards
 
                 # topk filter
                 for i, candidate in enumerate(candidates):
