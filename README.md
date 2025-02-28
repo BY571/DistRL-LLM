@@ -55,6 +55,9 @@ You can customize various parameters:
 - `--learner_chunk_size`: Number of samples to generate by the learner. Can be zero, but then the learner is idle during generation.
 - `--topk`: Number of top-k candidates to consider for training. As we can sample thousands of completions in parallel learning is not the bottleneck with topk we can subselect the best candidates to train on.
 
+For further parameters see `python train_distributed.py --help`.
+
+
 # Learner ALgorithms
 Currently, we have implemented a vanilla Policy Gradient algorithm and GRPO.
 | Algorithm | Description | Status |
