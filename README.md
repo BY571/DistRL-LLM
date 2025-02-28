@@ -6,6 +6,14 @@
 This repo contains code for distributed RL for fast and memory efficient LLM fine-tuning with unsloth, ray and vllm. 
 Currently, it is configured for a simple math task, but can be extended to other tasks. 
 
+
+### Architecture Overview
+This Repository uses Ray for distributed computing with:
+- Actors: Generate candidate responses in parallel
+- Learner: Updates the policy based on rewards (can also be used for generation as training is synchronous otherwise learner is idle during generation)
+- Trainer: Orchestrates the entire process
+The system leverages vLLM for fast inference and Unsloth for memory-efficient fine-tuning, making it possible to train large language models with reinforcement learning on limited hardware.
+
 <details>
 <summary><h1>Setup</h1></summary>
 
@@ -14,12 +22,6 @@ Currently, it is configured for a simple math task, but can be extended to other
 </details>
 
 
-# Architecture Overview
-This Repository uses Ray for distributed computing with:
-- Actors: Generate candidate responses in parallel
-- Learner: Updates the policy based on rewards (can also be used for generation as training is synchronous otherwise learner is idle during generation)
-- Trainer: Orchestrates the entire process
-The system leverages vLLM for fast inference and Unsloth for memory-efficient fine-tuning, making it possible to train large language models with reinforcement learning on limited hardware.
 
 # Usage
 After setting up the environment, you can run the distributed training with:
@@ -49,7 +51,8 @@ Currently, we have implemented a vanilla Policy Gradient algorithm and GRPO.
 
 
 
-# TODO:
+## TODO:
 - Usually the bottleneck for RL with LLMs is the online data generation. However, with ray and vllm this is not a problem. Instead the bottleneck is now the learning as we can sample thousands of completions in parallel. *Can we parallelize the learning process?*
 - Add more learner algorithms
 - Make option to use w & w/o vllm
+- Training becomes unstable with longer training, try to fix
