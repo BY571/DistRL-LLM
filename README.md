@@ -3,16 +3,21 @@
 
 # Distributed RL for LLM Fine-tuning
 
-This repo contains code for distributed RL for fast and memory efficient LLM fine-tuning with unsloth, ray and vllm. 
+This repo contains code for distributed RL for fast and memory efficient LLM fine-tuning using [Unsloth](https://github.com/unslothai/unsloth), [Ray](https://github.com/ray-project/ray), and [vLLM](https://github.com/vllm-project/vllm).
 Currently, it is configured for a simple math task, but can be extended to other tasks. 
 
+## 🚀 Features
+- Multi-GPU Training: Efficiently utilizes multiple GPUs for distributed RL-based fine-tuning.
+- Memory-Efficient Fine-Tuning: Uses Unsloth for reduced memory footprint.
+- Fast Inference: Leverages vLLM for high-throughput generation.
+- Scalable Distributed RL: Implements Ray to orchestrate multi-GPU workloads.
 
-### Architecture Overview
-This Repository uses Ray for distributed computing with:
-- Actors: Generate candidate responses in parallel
-- Learner: Updates the policy based on rewards (can also be used for generation as training is synchronous otherwise learner is idle during generation)
-- Trainer: Orchestrates the entire process
-The system leverages vLLM for fast inference and Unsloth for memory-efficient fine-tuning, making it possible to train large language models with reinforcement learning on limited hardware.
+### 🏗️ Architecture Overview
+This repository employs Ray for distributed computing with the following components:
+- Actors: Generate candidate responses in parallel across multiple GPUs.
+- Learner: Updates the policy based on rewards (can also participate in generation to avoid idleness).
+- Trainer: Orchestrates the entire training pipeline.
+The system leverages vLLM for fast inference and Unsloth for memory-efficient fine-tuning, making it possible to train large language models with reinforcement learning on limited hardware. This architecture enables efficient multi-GPU utilization, significantly accelerating the training process.
 
 <details>
 <summary><h1>Setup</h1></summary>
