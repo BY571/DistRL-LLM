@@ -67,7 +67,7 @@ Currently, we have implemented a vanilla Policy Gradient algorithm and GRPO.
 <details>
 <summary><h1>Performance Tests</h1></summary>
 
-Policy gradient training (~2hours)
+Policy gradient training (~2hours) Model: Qwen2.5-7B-Instruct-bnb-4bit, Dataset: MATH-500
 
 ![Performance Tests PG](./media/initial_pg_test.png)
 
