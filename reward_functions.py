@@ -46,4 +46,4 @@ def reward_function(completions, solutions):
     form_reward = soft_format_reward_func(completions)
     xml_reward = xmlcount_reward_func(completions)
     form_reward = form_reward + xml_reward
-    return np.array(list(zip(form_reward, acc_reward)))
+    return np.column_stack((form_reward, acc_reward))
