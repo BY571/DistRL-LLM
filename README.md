@@ -74,6 +74,11 @@ Policy gradient training (~2hours) Model: Qwen2.5-7B-Instruct-bnb-4bit, Dataset:
 
 ![Performance Tests PG](./media/initial_pg_test.png)
 
+
+GRPO training (~2hours) Model: Qwen2.5-7B-Instruct-bnb-4bit, Dataset: MATH-500
+
+![Performance Tests GRPO](./media/init_grpo_test.png)
+
 </details>
 
 ## TODO:
