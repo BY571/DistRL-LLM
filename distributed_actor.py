@@ -42,6 +42,7 @@ class BaseActor:
                 max_tokens=self.max_new_tokens,
                 temperature=self.gen_config.temperature,
                 n=self.num_candidates,
+                top_p=0.95,
             )
 
         self.policy = None

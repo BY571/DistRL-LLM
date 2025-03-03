@@ -1,6 +1,4 @@
 import argparse
-
-import numpy as np
 from datasets import load_dataset
 from distributed_trainer import Trainer
 from helper import process_dataset, r1_preprompt
@@ -18,12 +16,12 @@ if __name__ == "__main__":
     args.add_argument("--lr", type=float, default=2e-5)
     args.add_argument("--max_new_tokens", type=int, default=1200)
     args.add_argument("--max_prompt_tokens", type=int, default=350) # max: 865, mean 144
-    args.add_argument("--temperature", type=float, default=0.8) # TODO: test >1 
+    args.add_argument("--temperature", type=float, default=1.2) # TODO: test >1 
     args.add_argument("--episodes", type=int, default=15)
     args.add_argument("--num_candidates", type=int, default=16, help="Number of sampled candidate per monkey iteration")
     args.add_argument("--batch_size", type=int, default=32, help="Total batch size for all actors and learner that is later split into chunks") # 224 total per learner 
     args.add_argument("--learner_chunk_size", type=int, default=6, help="Number of samples to generate by the learner")
-    args.add_argument("--train_batch_size", type=int, default=8, help="Minimum batch size for the learner to train on with gradient accumulation")
+    args.add_argument("--train_batch_size", type=int, default=8, help="Minimum batch size for the learner to train on with gradient accumulation") #21400MiB currently in that setup
     args.add_argument("--save_every", type=int, default=100, help="Save the model every x training steps")
     args.add_argument("--eval_every", type=int, default=10, help="Evaluate the model every x training steps")
     args.add_argument("--number_of_actors", type=int, default=2, help="Number of actors to use, default is 0. Only uses the learner to generate and train.")
