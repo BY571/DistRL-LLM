@@ -22,11 +22,12 @@ if __name__ == "__main__":
     args.add_argument("--episodes", type=int, default=15)
     args.add_argument("--num_candidates", type=int, default=16, help="Number of sampled candidate per monkey iteration")
     args.add_argument("--batch_size", type=int, default=32, help="Total batch size for all actors and learner that is later split into chunks") # 224 total per learner 
-    args.add_argument("--learner_chunk_size", type=int, default=6, help="Number of samples to generate by the learner")
+    args.add_argument("--learner_chunk_size", type=int, default=4, help="Number of samples to generate by the learner")
     args.add_argument("--train_batch_size", type=int, default=8, help="Minimum batch size for the learner to train on with gradient accumulation")
     args.add_argument("--save_every", type=int, default=100, help="Save the model every x training steps")
     args.add_argument("--eval_every", type=int, default=10, help="Evaluate the model every x training steps")
-    args.add_argument("--number_of_actors", type=int, default=2, help="Number of actors to use, default is 0. Only uses the learner to generate and train.")
+    args.add_argument("--number_of_actors", type=int, default=1, help="Number of actors to use, default is 0. Only uses the learner to generate and train.")
+    args.add_argument("--number_of_learners", type=int, default=2, help="Number of learners to use, default is 1. Only uses one learner to train.")
     args.add_argument("--learner", type=str, choices=["pg", "grpo"], default="pg")
     args.add_argument("--max_lora_rank", type=int, default=32)
     args.add_argument("--topk", type=int, default=6, help="Number of top k generated candidates per task to consider to consider for training, filtered based on reward") 
@@ -34,8 +35,8 @@ if __name__ == "__main__":
     args.add_argument("--learner_gpu_usage", type=float, default=0.35)
     args = args.parse_args()
 
-    if args.number_of_actors == 0:
-        assert args.batch_size == 1, "Batch size must be 1 if number of actors is 0"
+    # if args.number_of_actors == 0:
+    #     assert args.batch_size == 1, "Batch size must be 1 if number of actors is 0"
 
     raw_dataset = load_dataset(args.dataset)["test"] # math only has test
     
@@ -70,6 +71,7 @@ if __name__ == "__main__":
         "model": args.model,
         "dataset": args.dataset,
         "number_of_actors": args.number_of_actors,
+        "number_of_learners": args.number_of_learners,
         "learner": args.learner,
         "use_vllm": True,
         "max_lora_rank": args.max_lora_rank,
