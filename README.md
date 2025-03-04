@@ -54,7 +54,7 @@ You can customize various parameters:
 - `--number_of_actors`: Number of actor GPUs (default: 2)
 - `--number_of_learners`: Number of learner GPUs (default: 1)
 - `--batch_size`: Total batch size for all actors and learners that is later split into chunks for each actor and learner
-- `--learner`: Learning algorithm to use, either "pg" (Policy Gradient) or "grpo" (Generalized Reward-Weighted Policy Optimization)
+- `--learner`: Learning algorithm to use, either "pg" (Policy Gradient) or "grpo" (Group Relative Policy Optimization)
 - `--learner_chunk_size`: Sub batch size from the inital batch size for each learner to generate.
 - `--topk`: Number of top-k candidates to consider for training. As we can sample thousands of completions in parallel learning is not the bottleneck with topk we can subselect the best candidates to train on.
 
