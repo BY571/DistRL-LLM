@@ -28,11 +28,13 @@ class Trainer:
         )
 
         # create actors and learner
-        self.actors, self.learner = create_actor_and_learner(
-            config["number_of_actors"], config["model"], self.gen_config, config
+        self.actors, self.learners = create_actor_and_learner(
+            config["number_of_actors"], config["number_of_learners"], config["model"], self.gen_config, config
         )
         assert len(self.actors) == config["number_of_actors"]
         self.num_actors = config["number_of_actors"]
+        assert len(self.learners) == config["number_of_learners"]
+        self.num_learners = config["number_of_learners"]
 
         # set params
         self.episodes = config["episodes"]
@@ -67,58 +69,76 @@ class Trainer:
 
     def save_adapter(self,):
         # Save the adapter
-        ray.get(self.learner.save_adapter.remote())
+        ray.get(self.learners[0].save_adapter.remote())
 
     def compute_rewards(self, answers, solutions):
         return self.reward_function(answers, solutions)
 
     @staticmethod
-    def calculate_chunk_sizes(batch_size, num_actors, learner_chunk_size=1):
+    def calculate_chunk_sizes(batch_size, num_actors, num_learners=1, learner_chunk_size=1):
         """
-        Calculate chunk sizes for splitting data among actors.
+        Calculate chunk sizes for splitting data among actors and learners.
         
         Args:
             batch_size (int): Total size of the batch to be split
             num_actors (int): Number of actors to distribute chunks among
-            learner_chunk_size (int): Size of the last chunk (default: 1)
+            learner_chunk_size (int): Size of each learner chunk (default: 1)
+            num_learners (int): Number of learners (default: 1)
         
         Returns:
-            list: List of chunk sizes, where last chunk is learner_chunk_size and remaining data
-                is distributed equally among num_actors chunks
+            list: List of chunk sizes for actors followed by learners
         """
-        # Validate inputs
-        if batch_size <= 0:
-            raise ValueError("Batch size must be positive")
-        if num_actors <= 0:
-            raise ValueError("Number of actors must be positive")
-        if learner_chunk_size <= 0:
-            raise ValueError("Learner chunk size must be positive")
-        if batch_size < num_actors + learner_chunk_size:
-            #raise ValueError(f"Batch size ({batch_size}) must be greater than number of actors + learner_chunk_size ({num_actors + learner_chunk_size})")
-            print(f"Batch size ({batch_size}) must be greater than number of actors + learner_chunk_size ({num_actors + learner_chunk_size})")
-            # adapting learner_chunk size
-            learner_chunk_size = batch_size - num_actors
-
-        # Reserve items for the last chunk
-        remaining_size = batch_size - learner_chunk_size
+        # Validate basic inputs
+        if batch_size <= 0 or num_actors <= 0 or learner_chunk_size <= 0 or num_learners <= 0:
+            raise ValueError("All parameters must be positive")
+            
+        # Calculate total size needed for learners
+        total_learner_size = learner_chunk_size * num_learners
         
-        # Calculate size for each regular chunk
-        base_chunk_size = remaining_size // num_actors
-        extra_items = remaining_size % num_actors
-        
-        # Create list of chunk sizes
-        chunk_sizes = []
-        for i in range(num_actors):
-            # Distribute any remaining items one per chunk until exhausted
-            if i < extra_items:
-                chunk_sizes.append(base_chunk_size + 1)
+        # Check if we have enough data for all actors and learners
+        if batch_size < num_actors + total_learner_size:
+            print(f"Warning: Batch size ({batch_size}) is smaller than actors + learners need ({num_actors + total_learner_size})")
+            
+            # Prioritize actors: ensure each actor gets at least 1 item
+            min_actor_size = min(batch_size, num_actors)
+            
+            # If we can fit all actors with at least 1 item each
+            if min_actor_size == num_actors:
+                # Calculate remaining space for learners
+                remaining_for_learners = batch_size - num_actors
+                
+                # If we have space for at least one learner
+                if remaining_for_learners > 0 and num_learners > 0:
+                    learner_chunk_size = max(1, remaining_for_learners // num_learners)
+                    num_learners = min(num_learners, remaining_for_learners // learner_chunk_size)
+                    total_learner_size = learner_chunk_size * num_learners
+                else:
+                    # No space for learners
+                    num_learners = 0
+                    total_learner_size = 0
             else:
-                chunk_sizes.append(base_chunk_size)
+                # Can't fit all actors, reduce number of actors
+                num_actors = min_actor_size
+                # No space for learners
+                num_learners = 0
+                total_learner_size = 0
         
-        # Add the final chunk of specified size
-        chunk_sizes.append(learner_chunk_size)
+        # Calculate actor chunk sizes
+        actor_size = batch_size - total_learner_size
         
-        return chunk_sizes
+        # Create chunks list for actors
+        if num_actors > 0:
+            base_size = actor_size // num_actors
+            extra = actor_size % num_actors
+            chunks = [base_size + 1 if i < extra else base_size for i in range(num_actors)]
+        else:
+            chunks = []
+        
+        # Add learner chunks if any
+        if num_learners > 0:
+            chunks.extend([learner_chunk_size] * num_learners)
+        
+        return chunks
 
     @staticmethod
     def split_dict_lists(data, chunk_sizes):
@@ -165,17 +185,20 @@ class Trainer:
         else:
             batch_size = self.batch_size
         # Compute how to chunk the batch size across actors, creates a list of individual batch sizes per actor
-        chunk_sizes = self.calculate_chunk_sizes(batch_size, self.num_actors, self.learner_chunk_size)
+        chunk_sizes = self.calculate_chunk_sizes(batch_size, self.num_actors, self.num_learners, self.learner_chunk_size)
         # split the inital batch into chunks for each actor
         chunked_batch = self.split_dict_lists(batch, chunk_sizes)
         actor_tasks = [
             actor.generate.remote(task, sampling_params)
             for actor, task in zip(self.actors, chunked_batch[: self.num_actors])
         ]
-        learner_task = self.learner.generate.remote(chunked_batch[-1], sampling_params)
+        learner_tasks = [
+            learner.generate.remote(task, sampling_params)
+            for learner, task in zip(self.learners, chunked_batch[-self.num_learners:])
+        ]
 
         # Get results with timeout
-        generations = ray.get(actor_tasks + [learner_task], timeout=240)
+        generations = ray.get(actor_tasks + learner_tasks, timeout=240)
 
         generation_duration = time.time() - start_time
         return generations, generation_duration
@@ -196,9 +219,20 @@ class Trainer:
 
         return candidate_data, reward_duration
 
-
+    def merge_candidates(self, candidates):
+        problems = []
+        answers = []
+        rewards = []
+        for candidate in candidates:
+            for a, p, r in zip(candidate["answers"], candidate["problem"], candidate["rewards"]):
+                problems.extend(p)
+                answers.extend(a)
+                rewards.extend(r)
+        return problems, answers, rewards
+    
     def train(self):
         total_batch_steps = 0
+        total_samples_processed = 0
 
         # initialize wandb
         run = wandb.init(
@@ -214,6 +248,7 @@ class Trainer:
 
             for batch in loader:
                 total_batch_steps += 1
+                total_samples_processed += len(batch["problem"])
                 # generate responses
                 candidates, generation_duration, reward_duration = (
                     self._generate_all_candidates(batch)
@@ -224,6 +259,7 @@ class Trainer:
                 mean_task_token_length = []
                 max_task_acc_rewards = []
                 min_task_acc_rewards = []
+
                 for i, candidate in enumerate(candidates):
                     baselines = []
                     summed_rewards = []
@@ -235,7 +271,7 @@ class Trainer:
                         max_task_acc_rewards.append(np.max(batch_reward[:,1]))
                         min_task_acc_rewards.append(np.min(batch_reward[:,1]))
                         mean_task_format_reward.append(np.mean(batch_reward[:,0]))
-                        advantages.append((batch_reward.sum(axis=1) -np.mean(batch_reward.sum(axis=1))) / (np.std(batch_reward.sum(axis=1)) + 1e-8))
+                        advantages.append((batch_reward.sum(axis=1) - np.mean(batch_reward.sum(axis=1))) / (np.std(batch_reward.sum(axis=1)) + 1e-8))
                         summed_rewards.append(batch_reward.sum(axis=1)) # TODO: test here leave one out reward normalization
                     if self.learner_type == "grpo":
                         candidates[i]["rewards"] = advantages
@@ -266,8 +302,45 @@ class Trainer:
 
                 # update policy
                 update_start_time = time.time()
-                loss = ray.get(
-                    self.learner.train.remote(candidates))
+
+                # If there's only one learner, no need to split
+                if self.num_learners == 1:
+                    loss = ray.get(self.learners[0].train.remote(candidates))
+                else:
+                    # Merge problem, answer and rewards from candidates
+                    problems, answers, rewards = self.merge_candidates(candidates)
+                    # Split candidates across learners evenly
+                    chunk_sizes = [len(problems) // self.num_learners] * self.num_learners
+                    for i in range(len(problems) % self.num_learners):
+                        chunk_sizes[i] += 1  # Distribute remainder
+
+                    # Create chunks
+                    start = 0
+                    candidate_chunks = []
+                    for size in chunk_sizes:
+                        candidate_chunks.append((problems[start:start + size], answers[start:start + size], rewards[start:start + size]))
+
+                        start += size
+
+                    # Compute gradients independently
+                    gradients_futures = [
+                        learner.compute_gradients.remote(chunk) for learner, chunk in zip(self.learners, candidate_chunks)
+                    ]
+
+                    # Gather gradients from all learners - process one at a time to avoid OOM
+                    gradients = []
+                    losses = []
+                    for future in gradients_futures:
+                        gradient, loss = ray.get(future, timeout=240)
+                        gradients.append(gradient)
+                        losses.append(loss)
+                        # Clear memory after each gradient computation
+                        del future
+
+                    loss = sum(losses) / len(losses)
+
+                    # Merge gradients into the first learner
+                    ray.get(self.learners[0].apply_merged_gradients.remote(gradients))
                 update_duration = time.time() - update_start_time
 
                 # Save adapter
@@ -285,6 +358,7 @@ class Trainer:
                         ).item(),
                         "episode": episode,
                         "total_batch_steps": total_batch_steps,
+                        "total_samples_processed": total_samples_processed,
                         "timing/update_duration": update_duration,
                         "timing/reward_duration": reward_duration,
                         "timing/generation_duration": generation_duration,
@@ -298,17 +372,18 @@ class Trainer:
 
                 # save policy
                 if total_batch_steps % self.save_every == 0:
-                    ray.get(self.learner.save_checkpoint.remote(os.path.join(self.run_directory, f"model_{total_batch_steps}")))
+                    ray.get(self.learners[0].save_checkpoint.remote(os.path.join(self.run_directory, f"model_{total_batch_steps}")))
 
             # save final policy
             ray.get(
-                self.learner.save_checkpoint.remote(os.path.join(self.run_directory, f"model_{total_batch_steps}")
+                self.learners[0].save_checkpoint.remote(os.path.join(self.run_directory, f"model_{total_batch_steps}")
                 )
             )
         # cleanup
         ray.shutdown()
         
     def evaluate(self, wandb, total_steps,):
+        eval_time = time.time()
         eval_loader = self.test_dataset.iter(batch_size=self.batch_size)
 
         total_passed = 0
@@ -334,6 +409,9 @@ class Trainer:
         overall_pass_rate = total_passed / total_problems
         overall_max_pass_rate = total_max_passed / total_problems
         overall_token_length = np.mean(total_token_length)
+        eval_duration = time.time() - eval_time
         wandb.log({f"eval/pass@1(mean{self.eval_sampling_params.n})": overall_pass_rate,
                    f"eval/BoN({self.eval_sampling_params.n})": overall_max_pass_rate,
-                   "eval/mean_token_length": overall_token_length},step=total_steps,)
+                   "eval/mean_token_length": overall_token_length,
+                   "timing/eval_duration": eval_duration},step=total_steps)
+        

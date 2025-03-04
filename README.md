@@ -11,11 +11,13 @@ Currently, it is configured for a simple math task, but can be extended to other
 - Memory-Efficient Fine-Tuning: Uses [Unsloth](https://github.com/unslothai/unsloth) for reduced memory footprint.
 - Fast Inference: Leverages [vLLM](https://github.com/vllm-project/vllm) for high-throughput generation.
 - Scalable Distributed RL: Implements [Ray](https://github.com/ray-project/ray) to orchestrate multi-GPU workloads.
+- Flexible Resource Allocation: Supports customizable actor-to-learner GPU ratios (e.g., 3:1, 2:2, 1:3), allowing you to optimize resource utilization based on your specific workload characteristics and hardware configuration.
 
 ### 🏗️ Architecture Overview
 This repository employs [Ray](https://github.com/ray-project/ray) for distributed computing with the following components:
 - Actors: Generate candidate responses in parallel across multiple GPUs.
-- Learner: Updates the policy based on rewards (can also participate in generation to avoid idleness).
+- Learner(s): Updates the policy based on rewards (can also participate in generation to avoid idleness).
+    - **Multi-Learner Support**: Distributes gradient computation across multiple GPUs, with automatic gradient synchronization and averaging for faster and more stable training.
 - Trainer: Orchestrates the entire training pipeline.
 The system leverages [vLLM](https://github.com/vllm-project/vllm) for fast inference and [Unsloth](https://github.com/unslothai/unsloth) for memory-efficient fine-tuning, making it possible to train large language models with reinforcement learning on limited hardware. This architecture enables efficient multi-GPU utilization, significantly accelerating the training process.
 
@@ -44,15 +46,16 @@ pip install -r requirements.txt
 # Usage
 After setting up the environment, you can run the distributed training with:
 ```bash
-python train_distributed.py --run_name your_run_name --number_of_actors 2 --learner pg
+python train_distributed.py --run_name your_run_name --number_of_actors 2 --number_of_learners 1 --learner pg
 ```
 You can customize various parameters:
 - `--model`: The model to use (default: "unsloth/Qwen2.5-7B-Instruct-bnb-4bit")
 - `--dataset`: The dataset to use (default: "HuggingFaceH4/MATH-500") If you use a different dataset make sure to adapt the reward function and make sure the dataset is formatted correctly.
 - `--number_of_actors`: Number of actor GPUs (default: 2)
-- `--batch_size`: Total batch size, will be split across all actors
+- `--number_of_learners`: Number of learner GPUs (default: 1)
+- `--batch_size`: Total batch size for all actors and learners that is later split into chunks for each actor and learner
 - `--learner`: Learning algorithm to use, either "pg" (Policy Gradient) or "grpo" (Generalized Reward-Weighted Policy Optimization)
-- `--learner_chunk_size`: Number of samples to generate by the learner. Can be zero, but then the learner is idle during generation.
+- `--learner_chunk_size`: Sub batch size from the inital batch size for each learner to generate.
 - `--topk`: Number of top-k candidates to consider for training. As we can sample thousands of completions in parallel learning is not the bottleneck with topk we can subselect the best candidates to train on.
 
 For further parameters see `python train_distributed.py --help`.
@@ -82,7 +85,7 @@ GRPO training (~2hours) Model: Qwen2.5-7B-Instruct-bnb-4bit, Dataset: MATH-500
 </details>
 
 ## TODO:
-- Usually the bottleneck for RL with LLMs is the online data generation. However, with ray and vllm this is not a problem. Instead the bottleneck is now the learning as we can sample thousands of completions in parallel. *Can we parallelize the learning process?*
+- ~~Usually the bottleneck for RL with LLMs is the online data generation. However, with ray and vllm this is not a problem. Instead the bottleneck is now the learning as we can sample thousands of completions in parallel. *Can we parallelize the learning process?*~~ ✅ Solved with multi-learner support
 - Add more learner algorithms
 - Make option to use w & w/o vllm
 - Training becomes unstable with longer training, try to fix
