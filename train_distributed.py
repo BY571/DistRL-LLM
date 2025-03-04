@@ -22,7 +22,7 @@ if __name__ == "__main__":
     args.add_argument("--episodes", type=int, default=15)
     args.add_argument("--num_candidates", type=int, default=16, help="Number of sampled candidate per monkey iteration")
     args.add_argument("--batch_size", type=int, default=30, help="Total batch size for all actors and learner that is later split into chunks") # 224 total per learner 
-    args.add_argument("--learner_chunk_size", type=int, default=8, help="Sub batch size from the inital batch size for the learner to generate")
+    args.add_argument("--learner_chunk_size", type=int, default=8, help="Sub batch size from the inital batch size for each learner to generate")
     args.add_argument("--train_batch_size", type=int, default=8, help="Minimum batch size for the learner to train on with gradient accumulation")
     args.add_argument("--save_every", type=int, default=1000, help="Save the model every x training steps")
     args.add_argument("--eval_every", type=int, default=10, help="Evaluate the model every x training steps")
