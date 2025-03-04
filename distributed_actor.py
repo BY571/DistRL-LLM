@@ -292,7 +292,7 @@ class Learner(BaseActor):
 
         self.optimizer.zero_grad()
 
-        for i in tqdm(range(num_batches), desc="Update Policy..."):
+        for i in tqdm(range(num_batches), desc=f"Learner GPU {self.model_gpu_id}: Update Policy..."):
             start_idx = i * self.update_batch_size
             end_idx = min((i + 1) * self.update_batch_size, batch_size)
 
@@ -323,9 +323,9 @@ class Learner(BaseActor):
                     loss.item() * num_batches
                 )  # Unscale the loss for return value
 
-        # Update parameters after accumulating gradients from all batches
-        self.optimizer.step()
-        self.optimizer.zero_grad()
+        # # Update parameters after accumulating gradients from all batches
+        # self.optimizer.step()
+        # self.optimizer.zero_grad()
 
         return total_loss
 
@@ -340,11 +340,67 @@ class Learner(BaseActor):
                 answers.extend(a)
                 rewards.extend(r - b)
         print(f"Training on {len(problems)} samples")
-        return self.compute_loss(
+        loss =  self.compute_loss(
             problems,
             answers,
             rewards,
         )
+        # Update parameters after accumulating gradients from all batches
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+        return loss
+    
+    def _compute_gradients(self, problems, answers, rewards):
+        """Computes gradients without applying weight updates."""
+        self.optimizer.zero_grad()  # Reset gradients
+        loss = self.compute_loss(problems, answers, rewards)
+
+        # Collect gradients for all trainable LoRA parameters
+        gradients = {
+            name: param.grad.clone() if param.grad is not None else torch.zeros_like(param)
+            for name, param in self.policy.named_parameters()
+            if param.requires_grad
+        }
+        return gradients, loss
+
+    def compute_gradients(self, candidates):
+        FastLanguageModel.for_training(self.policy)
+        problems, answers, rewards = candidates
+        print(f"Learner {self.model_gpu_id}: Computing gradients on {len(problems)} samples.")
+        return self._compute_gradients(problems, answers, rewards)
+    
+    def apply_merged_gradients(self, gradients_list):
+        """Aggregates gradients from multiple learners and applies them."""
+        if not gradients_list:
+            print("No gradients to merge.")
+            return
+
+        num_learners = len(gradients_list)
+
+        # Initialize merged gradients on the correct device
+        merged_gradients = {
+            name: torch.zeros_like(gradients_list[0][name], device=self.policy.device)
+            for name in gradients_list[0]
+        }
+
+        # Sum gradients from all learners
+        for gradients in gradients_list:
+            for name in gradients:
+                merged_gradients[name] += gradients[name]
+
+        # Average the gradients
+        for name in merged_gradients:
+            merged_gradients[name] /= num_learners
+
+        # Apply merged gradients
+        for name, param in self.policy.named_parameters():
+            if name in merged_gradients and param.requires_grad:
+                param.grad = merged_gradients[name]
+
+        # Perform optimizer step safely
+        with torch.no_grad():
+            self.optimizer.step()
+        self.optimizer.zero_grad()
 
 
 @ray.remote(num_gpus=1, num_cpus=1)
@@ -505,6 +561,7 @@ class GRPOLearner(BaseActor):
 
 def create_actor_and_learner(
     number_of_actors=1,
+    number_of_learners=1,
     model_name="unsloth/Llama-3.2-3B-Instruct-bnb-4bit",
     gen_config=None,
     config=None,
@@ -515,18 +572,17 @@ def create_actor_and_learner(
         gpu_ids: List of GPU IDs to use (e.g., [0, 1] for first two GPUs)
     """
     available_gpus = list(range(torch.cuda.device_count()))
-    if len(available_gpus) < number_of_actors + 1:
+    if len(available_gpus) < number_of_actors + number_of_learners:
         raise RuntimeError(
-            f"Not enough GPUs available. Available: {len(available_gpus)}, Required: {number_of_actors + 1}"
+            f"Not enough GPUs available. Available: {len(available_gpus)}, Required: {number_of_actors + number_of_learners}"
         )
-
-    # Use the next available GPUs for actors
+    # Use the first available GPUs for actors
     gpu_ids = available_gpus[:number_of_actors]
-    # Use the last available GPU for the learner
-    learner_gpu_id = available_gpus[number_of_actors]
+    # Use the next available GPUs for learners
+    learner_gpu_ids = available_gpus[number_of_actors:number_of_actors + number_of_learners]
 
     print(f"Using GPUs for actors: {gpu_ids}")
-    print(f"Using GPU for learner: {learner_gpu_id}")
+    print(f"Using GPUs for learners: {learner_gpu_ids}")
 
     # Initialize Ray
     if not ray.is_initialized():
@@ -536,7 +592,7 @@ def create_actor_and_learner(
     pg = placement_group(
         name="llm_pg",
         bundles=[
-            {"GPU": 1, "CPU": 1} for _ in range(number_of_actors + 1)
+            {"GPU": 1, "CPU": 1} for _ in range(number_of_actors + number_of_learners)
         ],  # +1 for learner
         strategy="STRICT_PACK",
     )
@@ -563,10 +619,12 @@ def create_actor_and_learner(
         LEARNER = GRPOLearner
     else:
         LEARNER = Learner
-    learner = LEARNER.options(
-        scheduling_strategy=PlacementGroupSchedulingStrategy(
-            placement_group=pg, placement_group_bundle_index=number_of_actors
-        )
-    ).remote(model_name, learner_gpu_id, config, gen_config, gpu_usage=config["learner_gpu_usage"]) # 0.65 for 14B
+    learner = []
+    for i in range(number_of_learners):
+        learner.append(LEARNER.options(
+            scheduling_strategy=PlacementGroupSchedulingStrategy(
+                placement_group=pg, placement_group_bundle_index=number_of_actors + i
+            )
+        ).remote(model_name, learner_gpu_ids[i], config, gen_config, gpu_usage=config["learner_gpu_usage"]))
 
     return actors, learner
