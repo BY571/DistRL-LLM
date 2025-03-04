@@ -248,7 +248,7 @@ class Trainer:
 
             for batch in loader:
                 total_batch_steps += 1
-                total_samples_processed += len(batch)
+                total_samples_processed += len(batch["problem"])
                 # generate responses
                 candidates, generation_duration, reward_duration = (
                     self._generate_all_candidates(batch)
