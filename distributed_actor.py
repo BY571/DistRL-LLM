@@ -291,7 +291,7 @@ class Learner(BaseActor):
 
         self.optimizer.zero_grad()
 
-        for i in tqdm(range(num_batches), desc=f"Learner {self.model_gpu_id}: Update Policy..."):
+        for i in tqdm(range(num_batches), desc=f"Learner GPU {self.model_gpu_id}: Update Policy..."):
             start_idx = i * self.update_batch_size
             end_idx = min((i + 1) * self.update_batch_size, batch_size)
 
