@@ -291,7 +291,7 @@ class Learner(BaseActor):
 
         self.optimizer.zero_grad()
 
-        for i in tqdm(range(num_batches), desc="Update Policy..."):
+        for i in tqdm(range(num_batches), desc=f"Learner {self.model_gpu_id}: Update Policy..."):
             start_idx = i * self.update_batch_size
             end_idx = min((i + 1) * self.update_batch_size, batch_size)
 
@@ -352,26 +352,19 @@ class Learner(BaseActor):
     def _compute_gradients(self, problems, answers, rewards):
         """Computes gradients without applying weight updates."""
         self.optimizer.zero_grad()  # Reset gradients
-        _ = self.compute_loss(problems, answers, rewards)
+        loss = self.compute_loss(problems, answers, rewards)
 
         # Collect gradients for all trainable LoRA parameters
         gradients = {
-            name: param.grad.clone().detach()
+            name: param.grad.clone() if param.grad is not None else torch.zeros_like(param)
             for name, param in self.policy.named_parameters()
             if param.requires_grad
         }
-        return gradients
+        return gradients, loss
 
     def compute_gradients(self, candidates):
         FastLanguageModel.for_training(self.policy)
-        problems = []
-        answers = []
-        rewards = []
-        for candidate in candidates:
-            for a, p, r in zip(candidate["answers"], candidate["problem"], candidate["rewards"]):
-                problems.extend(p)
-                answers.extend(a)
-                rewards.extend(r)
+        problems, answers, rewards = candidates
         print(f"Learner {self.model_gpu_id}: Computing gradients on {len(problems)} samples.")
         return self._compute_gradients(problems, answers, rewards)
     
@@ -381,21 +374,31 @@ class Learner(BaseActor):
             print("No gradients to merge.")
             return
 
-        # Initialize merged gradients
-        merged_gradients = {name: torch.zeros_like(gradients_list[0][name]) for name in gradients_list[0]}
+        num_learners = len(gradients_list)
+
+        # Initialize merged gradients on the correct device
+        merged_gradients = {
+            name: torch.zeros_like(gradients_list[0][name], device=self.policy.device)
+            for name in gradients_list[0]
+        }
 
         # Sum gradients from all learners
         for gradients in gradients_list:
             for name in gradients:
                 merged_gradients[name] += gradients[name]
 
+        # Average the gradients
+        for name in merged_gradients:
+            merged_gradients[name] /= num_learners
+
         # Apply merged gradients
         for name, param in self.policy.named_parameters():
             if name in merged_gradients and param.requires_grad:
                 param.grad = merged_gradients[name]
 
-        # Perform optimizer step and clear gradients
-        self.optimizer.step()
+        # Perform optimizer step safely
+        with torch.no_grad():
+            self.optimizer.step()
         self.optimizer.zero_grad()
 
 

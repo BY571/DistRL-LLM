@@ -20,8 +20,8 @@ if __name__ == "__main__":
     args.add_argument("--max_prompt_tokens", type=int, default=350) # max: 865, mean 144
     args.add_argument("--temperature", type=float, default=0.8) # TODO: test >1 
     args.add_argument("--episodes", type=int, default=15)
-    args.add_argument("--num_candidates", type=int, default=16, help="Number of sampled candidate per monkey iteration")
-    args.add_argument("--batch_size", type=int, default=32, help="Total batch size for all actors and learner that is later split into chunks") # 224 total per learner 
+    args.add_argument("--num_candidates", type=int, default=3, help="Number of sampled candidate per monkey iteration")
+    args.add_argument("--batch_size", type=int, default=16, help="Total batch size for all actors and learner that is later split into chunks") # 224 total per learner 
     args.add_argument("--learner_chunk_size", type=int, default=4, help="Number of samples to generate by the learner")
     args.add_argument("--train_batch_size", type=int, default=8, help="Minimum batch size for the learner to train on with gradient accumulation")
     args.add_argument("--save_every", type=int, default=100, help="Save the model every x training steps")
@@ -30,7 +30,7 @@ if __name__ == "__main__":
     args.add_argument("--number_of_learners", type=int, default=2, help="Number of learners to use, default is 1. Only uses one learner to train.")
     args.add_argument("--learner", type=str, choices=["pg", "grpo"], default="pg")
     args.add_argument("--max_lora_rank", type=int, default=32)
-    args.add_argument("--topk", type=int, default=6, help="Number of top k generated candidates per task to consider to consider for training, filtered based on reward") 
+    args.add_argument("--topk", type=int, default=16, help="Number of top k generated candidates per task to consider to consider for training, filtered based on reward") 
     args.add_argument("--actor_gpu_usage", type=float, default=0.91)
     args.add_argument("--learner_gpu_usage", type=float, default=0.35)
     args = args.parse_args()
