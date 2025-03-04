@@ -232,6 +232,7 @@ class Trainer:
     
     def train(self):
         total_batch_steps = 0
+        total_samples_processed = 0
 
         # initialize wandb
         run = wandb.init(
@@ -247,6 +248,7 @@ class Trainer:
 
             for batch in loader:
                 total_batch_steps += 1
+                total_samples_processed += len(batch)
                 # generate responses
                 candidates, generation_duration, reward_duration = (
                     self._generate_all_candidates(batch)
@@ -356,6 +358,7 @@ class Trainer:
                         ).item(),
                         "episode": episode,
                         "total_batch_steps": total_batch_steps,
+                        "total_samples_processed": total_samples_processed,
                         "timing/update_duration": update_duration,
                         "timing/reward_duration": reward_duration,
                         "timing/generation_duration": generation_duration,
