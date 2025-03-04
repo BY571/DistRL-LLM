@@ -28,11 +28,13 @@ class Trainer:
         )
 
         # create actors and learner
-        self.actors, self.learner = create_actor_and_learner(
-            config["number_of_actors"], config["model"], self.gen_config, config
+        self.actors, self.learners = create_actor_and_learner(
+            config["number_of_actors"], config["number_of_learners"], config["model"], self.gen_config, config
         )
         assert len(self.actors) == config["number_of_actors"]
         self.num_actors = config["number_of_actors"]
+        assert len(self.learners) == config["number_of_learners"]
+        self.num_learners = config["number_of_learners"]
 
         # set params
         self.episodes = config["episodes"]
@@ -67,7 +69,7 @@ class Trainer:
 
     def save_adapter(self,):
         # Save the adapter
-        ray.get(self.learner.save_adapter.remote())
+        ray.get(self.learners[0].save_adapter.remote())
 
     def compute_rewards(self, answers, solutions):
         return self.reward_function(answers, solutions)
@@ -172,10 +174,13 @@ class Trainer:
             actor.generate.remote(task, sampling_params)
             for actor, task in zip(self.actors, chunked_batch[: self.num_actors])
         ]
-        learner_task = self.learner.generate.remote(chunked_batch[-1], sampling_params)
+        learner_tasks = [
+            learner.generate.remote(task, sampling_params)
+            for learner, task in zip(self.learners, chunked_batch[-self.num_learners:])
+        ]
 
         # Get results with timeout
-        generations = ray.get(actor_tasks + [learner_task], timeout=240)
+        generations = ray.get(actor_tasks + learner_tasks, timeout=240)
 
         generation_duration = time.time() - start_time
         return generations, generation_duration
@@ -235,7 +240,7 @@ class Trainer:
                         max_task_acc_rewards.append(np.max(batch_reward[:,1]))
                         min_task_acc_rewards.append(np.min(batch_reward[:,1]))
                         mean_task_format_reward.append(np.mean(batch_reward[:,0]))
-                        advantages.append((batch_reward.sum(axis=1) -np.mean(batch_reward.sum(axis=1))) / (np.std(batch_reward.sum(axis=1)) + 1e-8))
+                        advantages.append((batch_reward.sum(axis=1) - np.mean(batch_reward.sum(axis=1))) / (np.std(batch_reward.sum(axis=1)) + 1e-8))
                         summed_rewards.append(batch_reward.sum(axis=1)) # TODO: test here leave one out reward normalization
                     if self.learner_type == "grpo":
                         candidates[i]["rewards"] = advantages
@@ -266,8 +271,33 @@ class Trainer:
 
                 # update policy
                 update_start_time = time.time()
-                loss = ray.get(
-                    self.learner.train.remote(candidates))
+
+                # If there's only one learner, no need to split
+                if self.num_learners == 1:
+                    loss = ray.get(self.learners[0].train.remote(candidates))
+                else:
+                    # Split candidates across learners evenly
+                    chunk_sizes = [len(candidates) // self.num_learners] * self.num_learners
+                    for i in range(len(candidates) % self.num_learners):
+                        chunk_sizes[i] += 1  # Distribute remainder
+
+                    # Create chunks
+                    start = 0
+                    candidate_chunks = []
+                    for size in chunk_sizes:
+                        candidate_chunks.append(candidates[start:start + size])
+                        start += size
+
+                    # Compute gradients independently
+                    gradients_futures = [
+                        learner.compute_gradients.remote(chunk) for learner, chunk in zip(self.learners, candidate_chunks)
+                    ]
+
+                    # Gather gradients from all learners
+                    gradients = ray.get(gradients_futures, timeout=240)
+
+                    # Merge gradients into the first learner
+                    ray.get(self.learners[0].apply_merged_gradients.remote(gradients))
                 update_duration = time.time() - update_start_time
 
                 # Save adapter
