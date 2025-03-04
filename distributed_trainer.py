@@ -369,17 +369,18 @@ class Trainer:
 
                 # save policy
                 if total_batch_steps % self.save_every == 0:
-                    ray.get(self.learner.save_checkpoint.remote(os.path.join(self.run_directory, f"model_{total_batch_steps}")))
+                    ray.get(self.learners[0].save_checkpoint.remote(os.path.join(self.run_directory, f"model_{total_batch_steps}")))
 
             # save final policy
             ray.get(
-                self.learner.save_checkpoint.remote(os.path.join(self.run_directory, f"model_{total_batch_steps}")
+                self.learners[0].save_checkpoint.remote(os.path.join(self.run_directory, f"model_{total_batch_steps}")
                 )
             )
         # cleanup
         ray.shutdown()
         
     def evaluate(self, wandb, total_steps,):
+        eval_time = time.time()
         eval_loader = self.test_dataset.iter(batch_size=self.batch_size)
 
         total_passed = 0
@@ -405,6 +406,9 @@ class Trainer:
         overall_pass_rate = total_passed / total_problems
         overall_max_pass_rate = total_max_passed / total_problems
         overall_token_length = np.mean(total_token_length)
+        eval_duration = time.time() - eval_time
         wandb.log({f"eval/pass@1(mean{self.eval_sampling_params.n})": overall_pass_rate,
                    f"eval/BoN({self.eval_sampling_params.n})": overall_max_pass_rate,
-                   "eval/mean_token_length": overall_token_length},step=total_steps,)
+                   "eval/mean_token_length": overall_token_length,
+                   "timing/eval_duration": eval_duration},step=total_steps)
+        
