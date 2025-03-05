@@ -89,7 +89,7 @@ class Trainer:
             list: List of chunk sizes for actors followed by learners
         """
         # Validate basic inputs
-        if batch_size <= 0 or num_actors <= 0 or learner_chunk_size <= 0 or num_learners <= 0:
+        if batch_size <= 0 or num_actors <= 0 or num_learners <= 0:
             raise ValueError("All parameters must be positive")
             
         # Calculate total size needed for learners
