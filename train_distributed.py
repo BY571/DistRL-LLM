@@ -1,6 +1,4 @@
 import argparse
-
-import numpy as np
 from datasets import load_dataset
 from distributed_trainer import Trainer
 from helper import process_dataset, r1_preprompt
@@ -18,7 +16,7 @@ if __name__ == "__main__":
     args.add_argument("--lr", type=float, default=2e-5)
     args.add_argument("--max_new_tokens", type=int, default=1200)
     args.add_argument("--max_prompt_tokens", type=int, default=350) # max: 865, mean 144
-    args.add_argument("--temperature", type=float, default=0.8) # TODO: test >1 
+    args.add_argument("--temperature", type=float, default=1.2) # TODO: test >1 
     args.add_argument("--episodes", type=int, default=15)
     args.add_argument("--num_candidates", type=int, default=16, help="Number of sampled candidate per monkey iteration")
     args.add_argument("--batch_size", type=int, default=30, help="Total batch size for all actors and learner that is later split into chunks") # 224 total per learner 

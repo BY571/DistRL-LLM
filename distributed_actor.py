@@ -42,6 +42,7 @@ class BaseActor:
                 max_tokens=self.max_new_tokens,
                 temperature=self.gen_config.temperature,
                 n=self.num_candidates,
+                top_p=0.95,
             )
 
         self.policy = None
@@ -356,7 +357,7 @@ class Learner(BaseActor):
 
         # Collect gradients for all trainable LoRA parameters
         gradients = {
-            name: param.grad.clone() if param.grad is not None else torch.zeros_like(param)
+            name: param.grad.clone().cpu() if param.grad is not None else torch.zeros_like(param).cpu()
             for name, param in self.policy.named_parameters()
             if param.requires_grad
         }
@@ -378,14 +379,14 @@ class Learner(BaseActor):
 
         # Initialize merged gradients on the correct device
         merged_gradients = {
-            name: torch.zeros_like(gradients_list[0][name], device=self.policy.device)
+            name: torch.zeros_like(gradients_list[0][name], device="cpu")
             for name in gradients_list[0]
         }
 
         # Sum gradients from all learners
         for gradients in gradients_list:
             for name in gradients:
-                merged_gradients[name] += gradients[name]
+                merged_gradients[name] += gradients[name].to("cpu")
 
         # Average the gradients
         for name in merged_gradients:
@@ -394,7 +395,7 @@ class Learner(BaseActor):
         # Apply merged gradients
         for name, param in self.policy.named_parameters():
             if name in merged_gradients and param.requires_grad:
-                param.grad = merged_gradients[name]
+                param.grad = merged_gradients[name].to(self.policy.device)
 
         # Perform optimizer step safely
         with torch.no_grad():
