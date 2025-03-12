@@ -22,7 +22,7 @@ def process_dataset(tokenizer, dataset, preprompt="", postprompt=""):
     
     return dataset.map(generate_messages, batched=True)
 
-def init_peft_model(base_model, lora_rank=32, lora_alpha=16):
+def init_peft_model(base_model, lora_rank=32, lora_alpha=16, lora_dropout=0):
     return FastLanguageModel.get_peft_model(
         base_model,
         r=lora_rank,  # Choose any number > 0 ! Suggested 8, 16, 32, 64, 128
@@ -36,7 +36,7 @@ def init_peft_model(base_model, lora_rank=32, lora_alpha=16):
             "down_proj",
         ],
         lora_alpha=lora_alpha,
-        lora_dropout=0,  # Supports any, but = 0 is optimized
+        lora_dropout=lora_dropout,  # Supports any, but = 0 is optimized
         bias="none",  # Supports any, but = "none" is optimized
         # [NEW] "unsloth" uses 30% less VRAM, fits 2x larger batch sizes!
         use_gradient_checkpointing="unsloth",  # True or "unsloth" for very long context

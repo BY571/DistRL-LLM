@@ -32,6 +32,8 @@ class BaseActor:
         self.num_candidates = gen_config.num_return_sequences
         self.use_vllm = config["use_vllm"]
         self.max_lora_rank = config["max_lora_rank"]
+        self.lora_alpha = config["lora_alpha"]
+        self.lora_dropout = config["lora_dropout"]
         self.lora_save_path = config["lora_save_path"]
         self.max_gpu_usage = gpu_usage
         assert self.max_new_tokens == self.gen_config.max_new_tokens
@@ -64,7 +66,7 @@ class BaseActor:
             )
 
             # Initialize PEFT model
-            self.policy = init_peft_model(model, lora_rank=self.max_lora_rank)
+            self.policy = init_peft_model(model, lora_rank=self.max_lora_rank, lora_alpha=self.lora_alpha, lora_dropout=self.lora_dropout)
 
             # Verify initialization
             if self.policy is None:
