@@ -182,9 +182,9 @@ class BaseActor:
 
 @ray.remote(num_gpus=1, num_cpus=1)
 class Generator(BaseActor):
-    def __init__(self, model_name, gpu_id, config, gen_config=None, gpu_usage=0.8):
+    def __init__(self, model_name, actor_type="Generator", gpu_id=0, config=None, gen_config=None, gpu_usage=0.8):
         super().__init__(
-            actor_type="Generator",
+            actor_type=actor_type,
             model_name=model_name,
             gpu_id=gpu_id,
             config=config,
@@ -194,9 +194,9 @@ class Generator(BaseActor):
 
 
 class BaseLearner(BaseActor):
-    def __init__(self, model_name, gpu_id, config, gen_config=None, gpu_usage=0.7):
+    def __init__(self, model_name, actor_type="Learner", gpu_id=0, config=None, gen_config=None, gpu_usage=0.7):
         super().__init__(
-            actor_type="Learner",
+            actor_type=actor_type,
             model_name=model_name,
             gpu_id=gpu_id,
             config=config,
@@ -434,12 +434,14 @@ class GRPOLearner(BaseLearner):
         )
         self.batch_size = config["batch_size"]
         self.max_prompt_tokens = config["max_prompt_tokens"]
+        #self.entropy_alpha = config["entropy_alpha"]
 
 
     def compute_loss(self, messages, answers, rewards):
         rewards = torch.tensor(rewards).to("cuda")
 
         total_loss = 0
+        #entropy_loss = 0
         batch_size = len(messages)
         num_batches = (
             batch_size + self.update_batch_size - 1
@@ -468,11 +470,14 @@ class GRPOLearner(BaseLearner):
                 loss = -(((importance_logprob * mask).sum(-1) / mask.sum(-1)) * batch_rewards).mean()
 
                 # TODO: test add entropy here
-                #entropy = self.compute_entropy_bonus(log_probs, alpha=0.01)
-                #loss = loss + entropy
+                # if self.entropy_alpha > 0:
+                #     entropy = self.compute_entropy_bonus(log_probs, alpha=self.entropy_alpha)
+                #     entropy_loss += entropy
+                #     loss = loss + entropy
                 
                 # Scale the loss by the number of batches to maintain the same overall magnitude
                 loss = loss / num_batches
+                # entropy_loss = entropy_loss / num_batches
 
                 # Accumulate gradients
                 loss.backward()
