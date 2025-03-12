@@ -178,7 +178,7 @@ class BaseActor:
             return self.vllm_generate(messages, sampling_params)
         else:
             return self.base_generate(messages)
-
+        
 
 @ray.remote(num_gpus=1, num_cpus=1)
 class Generator(BaseActor):
@@ -193,8 +193,7 @@ class Generator(BaseActor):
         )
 
 
-@ray.remote(num_gpus=1, num_cpus=1)
-class Learner(BaseActor):
+class BaseLearner(BaseActor):
     def __init__(self, model_name, gpu_id, config, gen_config=None, gpu_usage=0.7):
         super().__init__(
             actor_type="Learner",
@@ -204,11 +203,9 @@ class Learner(BaseActor):
             gen_config=gen_config,
             gpu_usage=gpu_usage,
         )
+
         # Note: With 8-bit optimizers, large models can be finetuned with 75% less GPU memory without losing any accuracy compared to training with standard 32-bit optimizer
         # https://huggingface.co/docs/bitsandbytes/optimizers
-        # self.optimizer = torch.optim.Adam(
-        #     self.policy.parameters(), lr=config["lr"]#, weight_decay=0.01
-        # )
         self.optimizer = bnb.optim.Adam8bit(
             self.policy.parameters(), lr=config["lr"]#, weight_decay=0.1
         )
@@ -282,6 +279,72 @@ class Learner(BaseActor):
         entropy = -(probs * log_probs).sum(dim=-1)  # Sum over vocabulary dimension
         entropy_bonus = alpha * entropy.mean()  # Take mean over batch and sequence length
         return entropy_bonus
+
+    def _compute_gradients(self, problems, answers, rewards):
+        """Computes gradients without applying weight updates."""
+        self.optimizer.zero_grad()  # Reset gradients
+        loss = self.compute_loss(problems, answers, rewards)
+
+        # Collect gradients for all trainable LoRA parameters
+        gradients = {
+            name: param.grad.clone().cpu() if param.grad is not None else torch.zeros_like(param).cpu()
+            for name, param in self.policy.named_parameters()
+            if param.requires_grad
+        }
+        return gradients, loss
+
+    def compute_gradients(self, candidates):
+        FastLanguageModel.for_training(self.policy)
+        problems, answers, rewards = candidates
+        print(f"Learner {self.model_gpu_id}: Computing gradients on {len(problems)} samples.")
+        return self._compute_gradients(problems, answers, rewards)
+    
+    def apply_merged_gradients(self, gradients_list):
+        """Aggregates gradients from multiple learners and applies them."""
+        if not gradients_list:
+            print("No gradients to merge.")
+            return
+
+        num_learners = len(gradients_list)
+
+        # Initialize merged gradients on the correct device
+        merged_gradients = {
+            name: torch.zeros_like(gradients_list[0][name], device="cpu")
+            for name in gradients_list[0]
+        }
+
+        # Sum gradients from all learners
+        for gradients in gradients_list:
+            for name in gradients:
+                merged_gradients[name] += gradients[name].to("cpu")
+
+        # Average the gradients
+        for name in merged_gradients:
+            merged_gradients[name] /= num_learners
+
+        # Apply merged gradients
+        for name, param in self.policy.named_parameters():
+            if name in merged_gradients and param.requires_grad:
+                param.grad = merged_gradients[name].to(self.policy.device)
+
+        # Perform optimizer step safely
+        with torch.no_grad():
+            self.optimizer.step()
+        self.optimizer.zero_grad()
+
+
+@ray.remote(num_gpus=1, num_cpus=1)
+class Learner(BaseLearner):
+    def __init__(self, model_name, gpu_id, config, gen_config=None, gpu_usage=0.7):
+        super().__init__(
+            actor_type="Learner",
+            model_name=model_name,
+            gpu_id=gpu_id,
+            config=config,
+            gen_config=gen_config,
+            gpu_usage=gpu_usage,
+        )
+
 
     def compute_loss(self, messages, answers, rewards):
         rewards = torch.tensor(rewards).to("cuda")
@@ -352,61 +415,9 @@ class Learner(BaseActor):
         self.optimizer.zero_grad()
         return loss
     
-    def _compute_gradients(self, problems, answers, rewards):
-        """Computes gradients without applying weight updates."""
-        self.optimizer.zero_grad()  # Reset gradients
-        loss = self.compute_loss(problems, answers, rewards)
-
-        # Collect gradients for all trainable LoRA parameters
-        gradients = {
-            name: param.grad.clone().cpu() if param.grad is not None else torch.zeros_like(param).cpu()
-            for name, param in self.policy.named_parameters()
-            if param.requires_grad
-        }
-        return gradients, loss
-
-    def compute_gradients(self, candidates):
-        FastLanguageModel.for_training(self.policy)
-        problems, answers, rewards = candidates
-        print(f"Learner {self.model_gpu_id}: Computing gradients on {len(problems)} samples.")
-        return self._compute_gradients(problems, answers, rewards)
-    
-    def apply_merged_gradients(self, gradients_list):
-        """Aggregates gradients from multiple learners and applies them."""
-        if not gradients_list:
-            print("No gradients to merge.")
-            return
-
-        num_learners = len(gradients_list)
-
-        # Initialize merged gradients on the correct device
-        merged_gradients = {
-            name: torch.zeros_like(gradients_list[0][name], device="cpu")
-            for name in gradients_list[0]
-        }
-
-        # Sum gradients from all learners
-        for gradients in gradients_list:
-            for name in gradients:
-                merged_gradients[name] += gradients[name].to("cpu")
-
-        # Average the gradients
-        for name in merged_gradients:
-            merged_gradients[name] /= num_learners
-
-        # Apply merged gradients
-        for name, param in self.policy.named_parameters():
-            if name in merged_gradients and param.requires_grad:
-                param.grad = merged_gradients[name].to(self.policy.device)
-
-        # Perform optimizer step safely
-        with torch.no_grad():
-            self.optimizer.step()
-        self.optimizer.zero_grad()
-
 
 @ray.remote(num_gpus=1, num_cpus=1)
-class GRPOLearner(BaseActor):
+class GRPOLearner(BaseLearner):
     def __init__(self, model_name, gpu_id, config, gen_config=None, gpu_usage=0.7):
         super().__init__(
             actor_type="Learner",
@@ -424,73 +435,6 @@ class GRPOLearner(BaseActor):
         self.batch_size = config["batch_size"]
         self.max_prompt_tokens = config["max_prompt_tokens"]
 
-    def compute_current_policy_probs(self, policy, messages, answers):
-        # recreate input with question and answer but we only compute the probabilities for the answer
-        inputs = self.tokenizer.batch_encode_plus(
-            messages, return_tensors="pt", padding="max_length", padding_side="left", max_length=self.max_prompt_tokens, truncation=True
-        ).to("cuda")
-        #input_lens = inputs["attention_mask"].sum(-1).max()
-        input_lens = self.max_prompt_tokens
-        tokenized_answer = self.tokenizer.batch_encode_plus(
-            answers,
-            return_tensors="pt",
-            max_length=self.max_new_tokens,
-            padding="max_length",
-            padding_side="right",
-            truncation=True,
-        ).to("cuda")
-        answer_mask = tokenized_answer["attention_mask"]
-        # we only compute the logprob for the answers saves memory
-        # combine inputs and candidates
-        full_inputs = torch.cat(
-            [inputs["input_ids"], tokenized_answer["input_ids"]], dim=1
-        )
-        full_attention_mask = torch.cat(
-            [inputs["attention_mask"], tokenized_answer["attention_mask"]],
-            dim=1,
-        )
-
-        logits = policy(
-            input_ids=full_inputs, attention_mask=full_attention_mask
-        ).logits
-
-        logits = logits[:, :-1, :]  # shift the logits to the right by one token
-        input_ids = full_inputs[:, 1:]  # remove the first token
-        # Compute logprob only on answer token, -1 for the shift
-        logits = logits[:, input_lens - 1 :] 
-        input_ids = input_ids[:, input_lens - 1 :]
-        #print(f"Logits shape: {logits.shape}, Input ids shape: {input_ids.shape}")
-        # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
-        per_token_logps = []
-        for logits_row, input_ids_row in zip(logits, input_ids):
-            log_probs = logits_row.log_softmax(dim=-1)
-
-            token_log_prob = torch.gather(
-                log_probs, dim=1, index=input_ids_row.unsqueeze(1)
-            ).squeeze(1)
-            per_token_logps.append(token_log_prob)
-        action_log_probs = torch.stack(per_token_logps)
-        return action_log_probs, answer_mask
-
-    def save_checkpoint(self, path):
-        self.policy.save_pretrained(path)
-
-    @staticmethod
-    def compute_entropy_bonus(log_probs, alpha):
-        """
-        Computes the entropy bonus for reinforcement learning loss.
-
-        Args:
-            log_probs (torch.Tensor): Log probabilities of shape (batch_size, sequence_length, vocab_size).
-            alpha (float): Entropy weighting coefficient.
-
-        Returns:
-            torch.Tensor: Scalar entropy bonus value.
-        """
-        probs = log_probs.exp()  # Convert log probabilities to probabilities
-        entropy = -(probs * log_probs).sum(dim=-1)  # Sum over vocabulary dimension
-        entropy_bonus = alpha * entropy.mean()  # Take mean over batch and sequence length
-        return entropy_bonus
 
     def compute_loss(self, messages, answers, rewards):
         rewards = torch.tensor(rewards).to("cuda")
@@ -538,8 +482,8 @@ class GRPOLearner(BaseActor):
                 )  # Unscale the loss for return value
 
         # Update parameters after accumulating gradients from all batches
-        self.optimizer.step()
-        self.optimizer.zero_grad()
+        # self.optimizer.step()
+        # self.optimizer.zero_grad()
 
         return total_loss
 
@@ -554,11 +498,15 @@ class GRPOLearner(BaseActor):
                 answers.extend(a)
                 rewards.extend(r)
         print(f"Training on {len(problems)} samples")
-        return self.compute_loss(
+
+        loss = self.compute_loss(
             problems,
             answers,
             rewards,
         )
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+        return loss
 
 
 def create_actor_and_learner(
